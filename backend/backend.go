@@ -14,10 +14,9 @@ import (
 type Backend interface {
 	// Ask for input and configure the backend. Similar to
 	// terraform.ResourceProvider.
-	/*
-		Input(*terraform.ResourceConfig) (*terraform.ResourceConfig, error)
-		Configure(*terraform.ResourceConfig) error
-	*/
+	//Input(*terraform.ResourceConfig) (*terraform.ResourceConfig, error)
+	Validate(*terraform.ResourceConfig) ([]string, []error)
+	Configure(*terraform.ResourceConfig) error
 
 	// State returns the current state for this environment. This state may
 	// not be loaded locally: the proper APIs should be called on state.State

@@ -1,8 +1,11 @@
-package backend
+package local
 
 import (
 	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/terraform/backend"
+	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/state"
+	"github.com/hashicorp/terraform/terraform"
 )
 
 // Local is an implementation of EnhancedBackend that performs all operations
@@ -26,7 +29,27 @@ type Local struct {
 	// behavior.
 	//
 	// If this is nil, local performs normal state loading and storage.
-	Backend Backend
+	Backend backend.Backend
+
+	schema *schema.Backend
+}
+
+func (b *Local) Validate(c *terraform.ResourceConfig) ([]string, []error) {
+	f := b.schema.Validate
+	if b.Backend != nil {
+		f = b.Backend.Validate
+	}
+
+	return f(c)
+}
+
+func (b *Local) Configure(c *terraform.ResourceConfig) error {
+	f := b.schema.Configure
+	if b.Backend != nil {
+		f = b.Backend.Configure
+	}
+
+	return f(c)
 }
 
 func (b *Local) State() (state.State, error) {
@@ -57,6 +80,6 @@ func (b *Local) State() (state.State, error) {
 	return s, nil
 }
 
-func (b *Local) Operation(*Operation) error {
+func (b *Local) Operation(*backend.Operation) error {
 	return nil
 }
