@@ -23,6 +23,15 @@ type Local struct {
 	StateOutPath    string
 	StateBackupPath string
 
+	// ContextOpts are the base context options to set when initializing a
+	// Terraform context. Many of these will be overridden or merged by
+	// Operation. See Operation for more details.
+	ContextOpts *terraform.ContextOpts
+
+	// Input, if true, will ask for necessary input prior to performing
+	// any operations.
+	Input bool
+
 	// Backend, if non-nil, will use this backend for non-enhanced behavior.
 	// This allows local behavior with remote state storage. It is a way to
 	// "upgrade" a non-enhanced backend to an enhanced backend with typical
@@ -30,11 +39,6 @@ type Local struct {
 	//
 	// If this is nil, local performs normal state loading and storage.
 	Backend backend.Backend
-
-	// ContextOpts are the base context options to set when initializing a
-	// Terraform context. Many of these will be overridden or merged by
-	// Operation. See Operation for more details.
-	ContextOpts *terraform.ContextOpts
 
 	schema *schema.Backend
 }
@@ -122,7 +126,17 @@ func (b *Local) Operation(op *backend.Operation) error {
 		return err
 	}
 
-	// TODO: ask for input
+	// If input asking is enabled, then do that
+	if b.Input {
+		mode := terraform.InputModeProvider
+		mode |= terraform.InputModeVar
+		mode |= terraform.InputModeVarUnset
+
+		if err := ctx.Input(mode); err != nil {
+			return errwrap.Wrapf("Error asking for user input: {{err}}", err)
+		}
+	}
+
 	// TODO: validate context
 
 	// Perform operation
