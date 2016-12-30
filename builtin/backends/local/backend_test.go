@@ -85,6 +85,38 @@ test_instance.foo:
 	`)
 }
 
+func TestLocal_refreshValidate(t *testing.T) {
+	b := TestLocal(t)
+	p := TestLocalProvider(t, b, "test")
+	terraform.TestStateFile(t, b.StatePath, testRefreshState())
+
+	p.RefreshFn = nil
+	p.RefreshReturn = &terraform.InstanceState{ID: "yes"}
+
+	mod, modCleanup := module.TestTree(t, "./test-fixtures/refresh")
+	defer modCleanup()
+
+	// Enable validation
+	b.Validation = true
+
+	op := &backend.Operation{
+		Type:   backend.OperationTypeRefresh,
+		Module: mod,
+	}
+	if err := b.Operation(op); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	if !p.ValidateCalled {
+		t.Fatal("validate should be called")
+	}
+
+	checkState(t, b.StateOutPath, `
+test_instance.foo:
+  ID = yes
+	`)
+}
+
 // testRefreshState is just a common state that we use for testing refresh.
 func testRefreshState() *terraform.State {
 	return &terraform.State{

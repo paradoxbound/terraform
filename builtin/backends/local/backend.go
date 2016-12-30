@@ -2,6 +2,7 @@ package local
 
 import (
 	"github.com/hashicorp/errwrap"
+	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/state"
@@ -28,9 +29,13 @@ type Local struct {
 	// Operation. See Operation for more details.
 	ContextOpts *terraform.ContextOpts
 
-	// Input, if true, will ask for necessary input prior to performing
-	// any operations.
-	Input bool
+	// Input will ask for necessary input prior to performing any operations.
+	//
+	// Validation will perform validation prior to running an operation. The
+	// variable naming doesn't match the style of others since we have a func
+	// Validate.
+	Input      bool
+	Validation bool
 
 	// Backend, if non-nil, will use this backend for non-enhanced behavior.
 	// This allows local behavior with remote state storage. It is a way to
@@ -137,7 +142,15 @@ func (b *Local) Operation(op *backend.Operation) error {
 		}
 	}
 
-	// TODO: validate context
+	// If validation is enabled, validate
+	if b.Validation {
+		// We ignore warnings here on purpose. We expect users to be listening
+		// to the terraform.Hook called after a validation.
+		_, es := ctx.Validate()
+		if len(es) > 0 {
+			return multierror.Append(nil, es...)
+		}
+	}
 
 	// Perform operation
 	newState, err := ctx.Refresh()
