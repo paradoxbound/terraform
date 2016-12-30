@@ -31,6 +31,11 @@ type Local struct {
 	// If this is nil, local performs normal state loading and storage.
 	Backend backend.Backend
 
+	// ContextOpts are the base context options to set when initializing a
+	// Terraform context. Many of these will be overridden or merged by
+	// Operation. See Operation for more details.
+	ContextOpts *terraform.ContextOpts
+
 	schema *schema.Backend
 }
 
@@ -80,6 +85,59 @@ func (b *Local) State() (state.State, error) {
 	return s, nil
 }
 
-func (b *Local) Operation(*backend.Operation) error {
+// Operation implements backend.Enhanced
+//
+// This will initialize an in-memory terraform.Context to perform the
+// operation within this process.
+//
+// The given operation parameter will be merged with the ContextOpts on
+// the structure with the following rules. If a rule isn't specified and the
+// name conflicts, assume that the field is overwritten if set.
+func (b *Local) Operation(op *backend.Operation) error {
+	// Initialize our context options
+	var opts terraform.ContextOpts
+	if v := b.ContextOpts; v != nil {
+		opts = *v
+	}
+
+	// Copy set options from the operation
+	opts.Destroy = op.Destroy
+	opts.Module = op.Module
+	opts.Targets = op.Targets
+	opts.Variables = op.Variables
+
+	// Load our state
+	state, err := b.State()
+	if err != nil {
+		return errwrap.Wrapf("Error loading state: {{err}}", err)
+	}
+	if err := state.RefreshState(); err != nil {
+		return errwrap.Wrapf("Error loading state: {{err}}", err)
+	}
+	opts.State = state.State()
+
+	// Build the context
+	ctx, err := terraform.NewContext(&opts)
+	if err != nil {
+		return err
+	}
+
+	// TODO: ask for input
+	// TODO: validate context
+
+	// Perform operation
+	newState, err := ctx.Refresh()
+	if err != nil {
+		return errwrap.Wrapf("Error refreshing state: {{err}}", err)
+	}
+
+	// Write and persist the state
+	if err := state.WriteState(newState); err != nil {
+		return errwrap.Wrapf("Error writing state: {{err}}", err)
+	}
+	if err := state.PersistState(); err != nil {
+		return errwrap.Wrapf("Error saving state: {{err}}", err)
+	}
+
 	return nil
 }
