@@ -312,11 +312,6 @@ func (m *Meta) PersistState(s *terraform.State) error {
 	return m.state.PersistState()
 }
 
-// Input returns true if we should ask for input for context.
-func (m *Meta) Input() bool {
-	return !test && m.input && len(m.variables) == 0
-}
-
 // StdinPiped returns true if the input is piped.
 func (m *Meta) StdinPiped() bool {
 	fi, err := wrappedstreams.Stdin().Stat()

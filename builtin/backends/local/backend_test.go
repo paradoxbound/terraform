@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -26,13 +27,14 @@ func TestLocal_refresh(t *testing.T) {
 	mod, modCleanup := module.TestTree(t, "./test-fixtures/refresh")
 	defer modCleanup()
 
-	op := &backend.Operation{
-		Type:   backend.OperationTypeRefresh,
-		Module: mod,
-	}
-	if err := b.Operation(op); err != nil {
+	op := testOperationRefresh()
+	op.Module = mod
+
+	run, err := b.Operation(context.Background(), op)
+	if err != nil {
 		t.Fatalf("bad: %s", err)
 	}
+	<-run.Done()
 
 	if !p.RefreshCalled {
 		t.Fatal("refresh should be called")
@@ -67,13 +69,15 @@ func TestLocal_refreshInput(t *testing.T) {
 	b.Input = true
 	b.ContextOpts.UIInput = &terraform.MockUIInput{InputReturnString: "bar"}
 
-	op := &backend.Operation{
-		Type:   backend.OperationTypeRefresh,
-		Module: mod,
-	}
-	if err := b.Operation(op); err != nil {
+	op := testOperationRefresh()
+	op.Module = mod
+	op.UIIn = b.ContextOpts.UIInput
+
+	run, err := b.Operation(context.Background(), op)
+	if err != nil {
 		t.Fatalf("bad: %s", err)
 	}
+	<-run.Done()
 
 	if !p.RefreshCalled {
 		t.Fatal("refresh should be called")
@@ -99,13 +103,14 @@ func TestLocal_refreshValidate(t *testing.T) {
 	// Enable validation
 	b.Validation = true
 
-	op := &backend.Operation{
-		Type:   backend.OperationTypeRefresh,
-		Module: mod,
-	}
-	if err := b.Operation(op); err != nil {
+	op := testOperationRefresh()
+	op.Module = mod
+
+	run, err := b.Operation(context.Background(), op)
+	if err != nil {
 		t.Fatalf("bad: %s", err)
 	}
+	<-run.Done()
 
 	if !p.ValidateCalled {
 		t.Fatal("validate should be called")
@@ -115,6 +120,14 @@ func TestLocal_refreshValidate(t *testing.T) {
 test_instance.foo:
   ID = yes
 	`)
+}
+
+func testOperationRefresh() *backend.Operation {
+	return &backend.Operation{
+		Sequence: []backend.OperationType{
+			backend.OperationTypeRefresh,
+		},
+	}
 }
 
 // testRefreshState is just a common state that we use for testing refresh.

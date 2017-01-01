@@ -5,6 +5,8 @@
 package backend
 
 import (
+	"context"
+
 	"github.com/hashicorp/terraform/config/module"
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
@@ -34,25 +36,76 @@ type Enhanced interface {
 
 	// Operation performs a Terraform operation such as refresh, plan, apply.
 	// It is up to the implementation to determine what "performing" means.
-	// This should block until the operation is complete.
-	Operation(*Operation) error
+	// This DOES NOT BLOCK. The context returned as part of RunningOperation
+	// should be used to block for completion.
+	Operation(context.Context, *Operation) (*RunningOperation, error)
 }
 
 // An operation represents an operation for Terraform to execute.
+//
+// Note that not all fields are supported by all backends and can result
+// in an error if set. All backend implementations should show user-friendly
+// errors explaining any incorrectly set values. For example, the local
+// backend doesn't support a PlanId being set.
+//
+// The operation options are purposely designed to have maximal compatibility
+// between Terraform and Terraform Servers (a commercial product offered by
+// HashiCorp). Therefore, it isn't expected that other implementation support
+// every possible option. The struct here is generalized in order to allow
+// even partial implementations to exist in the open, without walling off
+// remote functionality 100% behind a commercial wall. Anyone can implement
+// against this interface and have Terraform interact with it just as it
+// would with HashiCorp-provided Terraform Servers.
 type Operation struct {
-	Type OperationType // Enum representing the available ops
+	// Sequence is the list of operations to perform under the same context.
+	// This allows a refresh, plan, and apply -- for example -- to be performed
+	// as a single unit before committing the state.
+	Sequence []OperationType
 
-	// Configuration related to the operation:
+	// PlanId is an opaque value that backends can use to execute a specific
+	// plan for an apply operation.
+	//
+	// PlanPath can be specified as a path to a plan file.
+	PlanId   string
+	PlanPath string
 
-	Id        string       // For local, this is a plan file
-	Destroy   bool         // Destroy mode
-	Module    *module.Tree // Can be nil
+	// Module settings specify the root module to use for operations.
+	Module *module.Tree
+
+	// The options below are more self-explanatory and affect the runtime
+	// behavior of the operation.
+	Destroy   bool
 	Targets   []string
 	Variables map[string]interface{}
 
-	// Meta
+	// Input/output/control options.
+	UIIn  terraform.UIInput
+	UIOut terraform.UIOutput
+}
 
-	UIIn     terraform.UIInput  // Ui to read
-	UIOut    terraform.UIOutput // Ui to write
-	CancelCh <-chan struct{}    // Graceful exit by closing
+// RunningOperation is the result of starting an operation.
+type RunningOperation struct {
+	// Context should be used to track Done and Err for errors.
+	//
+	// For implementers of a backend, this context should not wrap the
+	// passed in context. Otherwise, canceling the parent context will
+	// immediately mark this context as "done" but those aren't the semantics
+	// we want: we want this context to be done only when the operation itself
+	// is fully done.
+	context.Context
+
+	// Err is the error of the operation. This is populated after
+	// the operation has completed.
+	Err error
+
+	// PlanId is populated after completing a `plan` operation and is used
+	// to specify a plan for the `apply` operation to apply. The plan is
+	// only usable if the operation completes successfully. This should
+	// only be read after the operation completes to avoid races.
+	PlanId string
+
+	// State is the final state after the operation completed. Persisting
+	// this state is managed by the backend. This should only be read
+	// after the operation completes to avoid read/write races.
+	State *terraform.State
 }
