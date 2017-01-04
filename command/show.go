@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hashicorp/terraform/command/format"
 	"github.com/hashicorp/terraform/terraform"
 )
 
@@ -92,7 +93,7 @@ func (c *ShowCommand) Run(args []string) int {
 	}
 
 	if plan != nil {
-		c.Ui.Output(FormatPlan(&FormatPlanOpts{
+		c.Ui.Output(format.Plan(&format.PlanOpts{
 			Plan:        plan,
 			Color:       c.Colorize(),
 			ModuleDepth: moduleDepth,
@@ -100,7 +101,7 @@ func (c *ShowCommand) Run(args []string) int {
 		return 0
 	}
 
-	c.Ui.Output(FormatState(&FormatStateOpts{
+	c.Ui.Output(format.State(&format.StateOpts{
 		State:       state,
 		Color:       c.Colorize(),
 		ModuleDepth: moduleDepth,

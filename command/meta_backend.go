@@ -46,6 +46,8 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
 
 	// Build the local backend
 	return &local.Local{
+		CLI:             m.Ui,
+		CLIColor:        m.Colorize(),
 		StatePath:       statePath,
 		StateOutPath:    stateOutPath,
 		StateBackupPath: backupPath,

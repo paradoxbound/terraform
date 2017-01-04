@@ -211,6 +211,7 @@ func formatNestedMap(indent string, outputMap map[string]interface{}) string {
 
 	return strings.TrimPrefix(outputBuf.String(), "\n")
 }
+
 func formatMapOutput(indent, outputName string, outputMap map[string]interface{}) string {
 	ks := make([]string, 0, len(outputMap))
 	for k, _ := range outputMap {

@@ -3,7 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
-	"os"
+	"sync"
 
 	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/go-multierror"
@@ -11,12 +11,19 @@ import (
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
+	"github.com/mitchellh/cli"
+	"github.com/mitchellh/colorstring"
 )
 
 // Local is an implementation of EnhancedBackend that performs all operations
 // locally. This is the "default" backend and implements normal Terraform
 // behavior as it is well known.
 type Local struct {
+	// CLI and Colorize control the CLI output. If CLI is nil then no CLI
+	// output will be done. If CLIColor is nil then no coloring will be done.
+	CLI      cli.Ui
+	CLIColor *colorstring.Colorize
+
 	// StatePath is the local path where state is read from.
 	//
 	// StateOutPath is the local path where the state will be written.
@@ -50,6 +57,7 @@ type Local struct {
 	Backend backend.Backend
 
 	schema *schema.Backend
+	opLock sync.Mutex
 }
 
 func (b *Local) Validate(c *terraform.ResourceConfig) ([]string, []error) {
@@ -107,50 +115,43 @@ func (b *Local) State() (state.State, error) {
 // the structure with the following rules. If a rule isn't specified and the
 // name conflicts, assume that the field is overwritten if set.
 func (b *Local) Operation(ctx context.Context, op *backend.Operation) (*backend.RunningOperation, error) {
+	// Determine the function to call for our operation
+	var f func(context.Context, *backend.Operation, *backend.RunningOperation)
+	switch op.Type {
+	case backend.OperationTypeRefresh:
+		f = b.opRefresh
+	case backend.OperationTypePlan:
+		f = b.opPlan
+	default:
+		return nil, fmt.Errorf(
+			"Unsupported operation type: %s\n\n" +
+				"This is a bug in Terraform and should be reported. The local backend\n" +
+				"is built-in to Terraform and should always support all operations.")
+	}
+
+	// Lock
+	b.opLock.Lock()
+
 	// Build our running operation
 	runningCtx, runningCtxCancel := context.WithCancel(context.Background())
 	runningOp := &backend.RunningOperation{Context: runningCtx}
 
 	// Do it
 	go func() {
+		defer b.opLock.Unlock()
 		defer runningCtxCancel()
-		b.runOperation(ctx, op, runningOp)
+		f(ctx, op, runningOp)
 	}()
 
 	// Return
 	return runningOp, nil
 }
 
-func (b *Local) runOperation(
-	ctx context.Context,
-	op *backend.Operation,
-	runningOp *backend.RunningOperation) {
-	// Check if our state exists if we're performing a refresh operation. We
-	// only do this if we're managing state with this backend.
-	if b.Backend == nil {
-		if _, err := os.Stat(b.StatePath); err != nil {
-			if os.IsNotExist(err) {
-				runningOp.Err = fmt.Errorf(
-					"The Terraform state file for your infrastructure does not\n"+
-						"exist. The 'refresh' command only works and only makes sense\n"+
-						"when there is existing state that Terraform is managing. Please\n"+
-						"double-check the value given below and try again. If you\n"+
-						"haven't created infrastructure with Terraform yet, use the\n"+
-						"'terraform apply' command.\n\n"+
-						"Path: %s",
-					b.StatePath)
-				return
-			}
-
-			runningOp.Err = fmt.Errorf(
-				"There was an error reading the Terraform state that is needed\n"+
-					"for refreshing. The path and error are shown below.\n\n"+
-					"Path: %s\n\nError: %s",
-				b.StatePath)
-			return
-		}
-	}
-
+// Context returns the terraform.Context struct for the given operation.
+//
+// This will also initialize the context by asking for input and performing
+// validation, if the backend is configured to do so.
+func (b *Local) Context(op *backend.Operation, state state.State) (*terraform.Context, error) {
 	// Initialize our context options
 	var opts terraform.ContextOpts
 	if v := b.ContextOpts; v != nil {
@@ -167,25 +168,12 @@ func (b *Local) runOperation(
 	}
 
 	// Load our state
-	state, err := b.State()
-	if err != nil {
-		runningOp.Err = errwrap.Wrapf("Error loading state: {{err}}", err)
-		return
-	}
-	if err := state.RefreshState(); err != nil {
-		runningOp.Err = errwrap.Wrapf("Error loading state: {{err}}", err)
-		return
-	}
 	opts.State = state.State()
-
-	// Set the operation state to our initial state for now
-	runningOp.State = opts.State
 
 	// Build the context
 	tfCtx, err := terraform.NewContext(&opts)
 	if err != nil {
-		runningOp.Err = err
-		return
+		return nil, err
 	}
 
 	// If input asking is enabled, then do that
@@ -195,8 +183,7 @@ func (b *Local) runOperation(
 		mode |= terraform.InputModeVarUnset
 
 		if err := tfCtx.Input(mode); err != nil {
-			runningOp.Err = errwrap.Wrapf("Error asking for user input: {{err}}", err)
-			return
+			return nil, errwrap.Wrapf("Error asking for user input: {{err}}", err)
 		}
 	}
 
@@ -206,26 +193,23 @@ func (b *Local) runOperation(
 		// to the terraform.Hook called after a validation.
 		_, es := tfCtx.Validate()
 		if len(es) > 0 {
-			runningOp.Err = multierror.Append(nil, es...)
-			return
+			return nil, multierror.Append(nil, es...)
 		}
 	}
 
-	// Perform operation and write the resulting state to the running op
-	newState, err := tfCtx.Refresh()
-	runningOp.State = newState
-	if err != nil {
-		runningOp.Err = errwrap.Wrapf("Error refreshing state: {{err}}", err)
-		return
+	return tfCtx, nil
+}
+
+// Colorize returns the Colorize structure that can be used for colorizing
+// output. This is gauranteed to always return a non-nil value and so is useful
+// as a helper to wrap any potentially colored strings.
+func (b *Local) Colorize() *colorstring.Colorize {
+	if b.CLIColor != nil {
+		return b.CLIColor
 	}
 
-	// Write and persist the state
-	if err := state.WriteState(newState); err != nil {
-		runningOp.Err = errwrap.Wrapf("Error writing state: {{err}}", err)
-		return
-	}
-	if err := state.PersistState(); err != nil {
-		runningOp.Err = errwrap.Wrapf("Error saving state: {{err}}", err)
-		return
+	return &colorstring.Colorize{
+		Colors:  colorstring.DefaultColors,
+		Disable: true,
 	}
 }

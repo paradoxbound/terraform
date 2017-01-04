@@ -3,7 +3,6 @@ package command
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/hashicorp/terraform/backend"
@@ -29,20 +28,10 @@ func (c *RefreshCommand) Run(args []string) int {
 		return 1
 	}
 
-	var configPath string
-	args = cmdFlags.Args()
-	if len(args) > 1 {
-		c.Ui.Error("The refresh command expects at most one argument.")
-		cmdFlags.Usage()
+	configPath, err := ModulePath(cmdFlags.Args())
+	if err != nil {
+		c.Ui.Error(err.Error())
 		return 1
-	} else if len(args) == 1 {
-		configPath = args[0]
-	} else {
-		var err error
-		configPath, err = os.Getwd()
-		if err != nil {
-			c.Ui.Error(fmt.Sprintf("Error getting pwd: %s", err))
-		}
 	}
 
 	// Load the module
@@ -61,7 +50,7 @@ func (c *RefreshCommand) Run(args []string) int {
 
 	// Build the operation
 	opReq := c.Operation()
-	opReq.Sequence = []backend.OperationType{backend.OperationTypeRefresh}
+	opReq.Type = backend.OperationTypeRefresh
 	opReq.Module = mod
 
 	// Perform the operation

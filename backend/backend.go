@@ -57,17 +57,17 @@ type Enhanced interface {
 // against this interface and have Terraform interact with it just as it
 // would with HashiCorp-provided Terraform Servers.
 type Operation struct {
-	// Sequence is the list of operations to perform under the same context.
-	// This allows a refresh, plan, and apply -- for example -- to be performed
-	// as a single unit before committing the state.
-	Sequence []OperationType
+	// Type is the operation to perform.
+	Type OperationType
 
 	// PlanId is an opaque value that backends can use to execute a specific
 	// plan for an apply operation.
 	//
 	// PlanPath can be specified as a path to a plan file.
-	PlanId   string
-	PlanPath string
+	PlanId      string
+	PlanPath    string
+	PlanRefresh bool   // PlanRefresh will do a refresh before a plan
+	PlanOutPath string // PlanOutPath is the path to save the plan
 
 	// Module settings specify the root module to use for operations.
 	Module *module.Tree
@@ -98,11 +98,9 @@ type RunningOperation struct {
 	// the operation has completed.
 	Err error
 
-	// PlanId is populated after completing a `plan` operation and is used
-	// to specify a plan for the `apply` operation to apply. The plan is
-	// only usable if the operation completes successfully. This should
-	// only be read after the operation completes to avoid races.
-	PlanId string
+	// PlanEmpty is populated after a Plan operation completes without error
+	// to note whether a plan is empty or has changes.
+	PlanEmpty bool
 
 	// State is the final state after the operation completed. Persisting
 	// this state is managed by the backend. This should only be read

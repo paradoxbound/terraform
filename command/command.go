@@ -3,6 +3,7 @@ package command
 import (
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/hashicorp/terraform/terraform"
 	"github.com/mitchellh/cli"
@@ -26,6 +27,33 @@ const DefaultBackupExtension = ".backup"
 // DefaultParallelism is the limit Terraform places on total parallel
 // operations as it walks the dependency graph.
 const DefaultParallelism = 10
+
+// ModulePath returns the path to the root module from the CLI args.
+//
+// This centralizes the logic for any commands that expect a module path
+// on their CLI args. This will verify that only one argument is given
+// and that it is a path to configuration.
+//
+// If your command accepts more than one arg, then change the slice bounds
+// to pass validation.
+func ModulePath(args []string) (string, error) {
+	// TODO: test
+
+	if len(args) > 1 {
+		return "", fmt.Errorf("Too many command line arguments. Configuration path expected.")
+	}
+
+	if len(args) == 0 {
+		path, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("Error getting pwd: %s", err)
+		}
+
+		return path, nil
+	}
+
+	return args[0], nil
+}
 
 func validateContext(ctx *terraform.Context, ui cli.Ui) bool {
 	log.Println("[INFO] Validating the context...")
