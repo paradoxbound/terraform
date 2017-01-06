@@ -211,7 +211,13 @@ func (c *ApplyCommand) Run(args []string) int {
 	}
 
 	if !c.Destroy {
-		if outputs := outputsAsString(op.State, terraform.RootModulePath, nil, true); outputs != "" {
+		// Get the right module that we used. If we ran a plan, then use
+		// that module.
+		if plan != nil {
+			mod = plan.Module
+		}
+
+		if outputs := outputsAsString(op.State, terraform.RootModulePath, mod.Config().Outputs, true); outputs != "" {
 			c.Ui.Output(c.Colorize().Color(outputs))
 		}
 	}
