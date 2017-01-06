@@ -28,7 +28,7 @@ func (b *Local) opApply(
 	b.ContextOpts.Hooks = append(b.ContextOpts.Hooks, countHook, stateHook)
 
 	// Get our context
-	tfCtx, state, err := b.Context(op)
+	tfCtx, state, err := b.context(op)
 	if err != nil {
 		runningOp.Err = err
 		return

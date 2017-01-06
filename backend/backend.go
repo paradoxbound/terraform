@@ -41,6 +41,19 @@ type Enhanced interface {
 	Operation(context.Context, *Operation) (*RunningOperation, error)
 }
 
+// Local implements additional behavior on a Backend that allows local
+// operations in addition to remote operations.
+//
+// This enables more behaviors of Terraform that require more data such
+// as `console`, `import`, `graph`. These require direct access to
+// configurations, variables, and more. Not all backends may support this
+// so we separate it out into its own optional interface.
+type Local interface {
+	// Context returns a runnable terraform Context. The operation parameter
+	// doesn't need a Type set but it needs other options set such as Module.
+	Context(*Operation) (*terraform.Context, state.State, error)
+}
+
 // An operation represents an operation for Terraform to execute.
 //
 // Note that not all fields are supported by all backends and can result

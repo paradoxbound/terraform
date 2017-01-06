@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/hashicorp/errwrap"
-	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/state"
@@ -148,98 +147,6 @@ func (b *Local) Operation(ctx context.Context, op *backend.Operation) (*backend.
 
 	// Return
 	return runningOp, nil
-}
-
-// Context returns the terraform.Context struct for the given operation.
-//
-// This will also initialize the context by asking for input and performing
-// validation, if the backend is configured to do so.
-func (b *Local) Context(op *backend.Operation) (*terraform.Context, state.State, error) {
-	var err error
-
-	// Setup our state. If we have a plan given, the state is directly from
-	// the plan itself.
-	var s state.State
-	if op.Plan != nil {
-		// Create a local state that targets our path to write and just
-		// write the plans state to it. This won't persist it on disk since
-		// PersistState isn't called yet.
-		s = &state.LocalState{
-			Path:    b.StateOutPath,
-			PathOut: b.StateOutPath,
-		}
-		s.WriteState(op.Plan.State)
-
-		// If we are backing up the state, wrap it
-		if path := b.StateBackupPath; path != "" {
-			s = &state.BackupState{
-				Real: s,
-				Path: path,
-			}
-		}
-	}
-
-	if s == nil {
-		s, err = b.State()
-		if err != nil {
-			return nil, nil, errwrap.Wrapf("Error loading state: {{err}}", err)
-		}
-		if err := s.RefreshState(); err != nil {
-			return nil, nil, errwrap.Wrapf("Error loading state: {{err}}", err)
-		}
-	}
-
-	// Initialize our context options
-	var opts terraform.ContextOpts
-	if v := b.ContextOpts; v != nil {
-		opts = *v
-	}
-
-	// Copy set options from the operation
-	opts.Destroy = op.Destroy
-	opts.Module = op.Module
-	opts.Targets = op.Targets
-	opts.UIInput = op.UIIn
-	if op.Variables != nil {
-		opts.Variables = op.Variables
-	}
-
-	// Load our state
-	opts.State = s.State()
-
-	// Build the context
-	var tfCtx *terraform.Context
-	if op.Plan != nil {
-		tfCtx, err = op.Plan.Context(&opts)
-	} else {
-		tfCtx, err = terraform.NewContext(&opts)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// If input asking is enabled, then do that
-	if op.Plan == nil && b.Input {
-		mode := terraform.InputModeProvider
-		mode |= terraform.InputModeVar
-		mode |= terraform.InputModeVarUnset
-
-		if err := tfCtx.Input(mode); err != nil {
-			return nil, nil, errwrap.Wrapf("Error asking for user input: {{err}}", err)
-		}
-	}
-
-	// If validation is enabled, validate
-	if b.Validation {
-		// We ignore warnings here on purpose. We expect users to be listening
-		// to the terraform.Hook called after a validation.
-		_, es := tfCtx.Validate()
-		if len(es) > 0 {
-			return nil, nil, multierror.Append(nil, es...)
-		}
-	}
-
-	return tfCtx, s, nil
 }
 
 // Colorize returns the Colorize structure that can be used for colorizing

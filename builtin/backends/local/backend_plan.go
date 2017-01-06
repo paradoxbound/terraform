@@ -38,7 +38,7 @@ func (b *Local) opPlan(
 	b.ContextOpts.Hooks = append(b.ContextOpts.Hooks, countHook)
 
 	// Get our context
-	tfCtx, _, err := b.Context(op)
+	tfCtx, _, err := b.context(op)
 	if err != nil {
 		runningOp.Err = err
 		return

@@ -11,6 +11,7 @@ import (
 
 func TestLocal_impl(t *testing.T) {
 	var _ backend.Enhanced = new(Local)
+	var _ backend.Local = new(Local)
 }
 
 func checkState(t *testing.T, path, expected string) {

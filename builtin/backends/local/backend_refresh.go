@@ -40,7 +40,7 @@ func (b *Local) opRefresh(
 	}
 
 	// Get our context
-	tfCtx, state, err := b.Context(op)
+	tfCtx, state, err := b.context(op)
 	if err != nil {
 		runningOp.Err = err
 		return
