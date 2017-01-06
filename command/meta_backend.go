@@ -132,7 +132,24 @@ func (m *Meta) Plan(path string) (*terraform.Plan, error) {
 		return nil, nil
 	}
 
-	return terraform.ReadPlan(f)
+	// Read the plan
+	p, err := terraform.ReadPlan(f)
+	if err != nil {
+		return nil, err
+	}
+
+	// We do a validation here that seems odd but if any plan is given,
+	// we must not have set any extra variables. The plan itself contains
+	// the variables and those aren't overwritten.
+	if len(m.variables) > 0 {
+		return nil, fmt.Errorf(
+			"You can't set variables with the '-var' or '-var-file' flag\n" +
+				"when you're applying a plan file. The variables used when\n" +
+				"the plan was created will be used. If you wish to use different\n" +
+				"variable values, create a new plan file.")
+	}
+
+	return p, nil
 }
 
 // BackendOpts are the options used to initialize a backend.Backend.

@@ -122,11 +122,14 @@ func (b *Local) Operation(ctx context.Context, op *backend.Operation) (*backend.
 		f = b.opRefresh
 	case backend.OperationTypePlan:
 		f = b.opPlan
+	case backend.OperationTypeApply:
+		f = b.opApply
 	default:
 		return nil, fmt.Errorf(
-			"Unsupported operation type: %s\n\n" +
-				"This is a bug in Terraform and should be reported. The local backend\n" +
-				"is built-in to Terraform and should always support all operations.")
+			"Unsupported operation type: %s\n\n"+
+				"This is a bug in Terraform and should be reported. The local backend\n"+
+				"is built-in to Terraform and should always support all operations.",
+			op.Type)
 	}
 
 	// Lock
@@ -202,7 +205,7 @@ func (b *Local) Context(op *backend.Operation) (*terraform.Context, state.State,
 	}
 
 	// If input asking is enabled, then do that
-	if b.Input {
+	if op.Plan == nil && b.Input {
 		mode := terraform.InputModeProvider
 		mode |= terraform.InputModeVar
 		mode |= terraform.InputModeVarUnset
