@@ -65,12 +65,15 @@ type Operation struct {
 	//
 	// PlanPath can be specified as a path to a plan file.
 	PlanId      string
-	PlanPath    string
 	PlanRefresh bool   // PlanRefresh will do a refresh before a plan
 	PlanOutPath string // PlanOutPath is the path to save the plan
 
 	// Module settings specify the root module to use for operations.
 	Module *module.Tree
+
+	// Plan is a plan that was passed as an argument. This is valid for
+	// plan and apply arguments but may not work for all backends.
+	Plan *terraform.Plan
 
 	// The options below are more self-explanatory and affect the runtime
 	// behavior of the operation.

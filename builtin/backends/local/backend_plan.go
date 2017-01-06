@@ -19,17 +19,14 @@ func (b *Local) opPlan(
 	runningOp *backend.RunningOperation) {
 	log.Printf("[INFO] backend/local: starting Plan operation")
 
-	// Get our state
-	state, err := b.State()
-	if err != nil {
-		runningOp.Err = errwrap.Wrapf("Error loading state: {{err}}", err)
-		return
+	if b.CLI != nil && op.Plan != nil {
+		b.CLI.Output(b.Colorize().Color(
+			"[reset][bold][yellow]" +
+				"The plan command received a saved plan file as input. This command\n" +
+				"will output the saved plan. This will not modify the already-existing\n" +
+				"plan. If you wish to generate a new plan, please pass in a configuration\n" +
+				"directory as an argument.\n\n"))
 	}
-	if err := state.RefreshState(); err != nil {
-		runningOp.Err = errwrap.Wrapf("Error loading state: {{err}}", err)
-		return
-	}
-	runningOp.State = state.State()
 
 	// Setup our count hook that keeps track of resource changes
 	countHook := new(CountHook)
@@ -41,11 +38,14 @@ func (b *Local) opPlan(
 	b.ContextOpts.Hooks = append(b.ContextOpts.Hooks, countHook)
 
 	// Get our context
-	tfCtx, err := b.Context(op, state)
+	tfCtx, _, err := b.Context(op)
 	if err != nil {
 		runningOp.Err = err
 		return
 	}
+
+	// Setup the state
+	runningOp.State = tfCtx.State()
 
 	// If we're refreshing before plan, perform that
 	if op.PlanRefresh {

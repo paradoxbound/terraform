@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/builtin/backends/local"
 	"github.com/hashicorp/terraform/config/module"
+	"github.com/hashicorp/terraform/terraform"
 )
 
 // NOTE: This is a temporary file during the backend branch. This will be
@@ -100,6 +101,38 @@ func (m *Meta) Module(path string) (*module.Tree, error) {
 	}
 
 	return mod, nil
+}
+
+// Plan returns the plan for the given path.
+//
+// This only has an effect if the path itself looks like a plan.
+// If error is nil and the plan is nil, then the path didn't look like
+// a plan.
+//
+// Error will be non-nil if path looks like a plan and loading the plan
+// failed.
+func (m *Meta) Plan(path string) (*terraform.Plan, error) {
+	// Open the path no matter if its a directory or file
+	f, err := os.Open(path)
+	defer f.Close()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"Failed to load Terraform configuration or plan: %s", err)
+	}
+
+	// Stat it so we can check if its a directory
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"Failed to load Terraform configuration or plan: %s", err)
+	}
+
+	// If this path is a directory, then it can't be a plan. Not an error.
+	if fi.IsDir() {
+		return nil, nil
+	}
+
+	return terraform.ReadPlan(f)
 }
 
 // BackendOpts are the options used to initialize a backend.Backend.

@@ -151,7 +151,27 @@ func (b *Local) Operation(ctx context.Context, op *backend.Operation) (*backend.
 //
 // This will also initialize the context by asking for input and performing
 // validation, if the backend is configured to do so.
-func (b *Local) Context(op *backend.Operation, state state.State) (*terraform.Context, error) {
+func (b *Local) Context(op *backend.Operation) (*terraform.Context, state.State, error) {
+	var err error
+
+	// Setup our state. If we have a plan given, the state is directly
+	// from the plan itself.
+	var s state.State
+	if op.Plan != nil {
+		s = &state.InmemState{}
+		s.WriteState(op.Plan.State)
+	}
+
+	if s == nil {
+		s, err = b.State()
+		if err != nil {
+			return nil, nil, errwrap.Wrapf("Error loading state: {{err}}", err)
+		}
+		if err := s.RefreshState(); err != nil {
+			return nil, nil, errwrap.Wrapf("Error loading state: {{err}}", err)
+		}
+	}
+
 	// Initialize our context options
 	var opts terraform.ContextOpts
 	if v := b.ContextOpts; v != nil {
@@ -168,12 +188,17 @@ func (b *Local) Context(op *backend.Operation, state state.State) (*terraform.Co
 	}
 
 	// Load our state
-	opts.State = state.State()
+	opts.State = s.State()
 
 	// Build the context
-	tfCtx, err := terraform.NewContext(&opts)
+	var tfCtx *terraform.Context
+	if op.Plan != nil {
+		tfCtx, err = op.Plan.Context(&opts)
+	} else {
+		tfCtx, err = terraform.NewContext(&opts)
+	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// If input asking is enabled, then do that
@@ -183,7 +208,7 @@ func (b *Local) Context(op *backend.Operation, state state.State) (*terraform.Co
 		mode |= terraform.InputModeVarUnset
 
 		if err := tfCtx.Input(mode); err != nil {
-			return nil, errwrap.Wrapf("Error asking for user input: {{err}}", err)
+			return nil, nil, errwrap.Wrapf("Error asking for user input: {{err}}", err)
 		}
 	}
 
@@ -193,11 +218,11 @@ func (b *Local) Context(op *backend.Operation, state state.State) (*terraform.Co
 		// to the terraform.Hook called after a validation.
 		_, es := tfCtx.Validate()
 		if len(es) > 0 {
-			return nil, multierror.Append(nil, es...)
+			return nil, nil, multierror.Append(nil, es...)
 		}
 	}
 
-	return tfCtx, nil
+	return tfCtx, s, nil
 }
 
 // Colorize returns the Colorize structure that can be used for colorizing

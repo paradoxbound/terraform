@@ -39,24 +39,15 @@ func (b *Local) opRefresh(
 		}
 	}
 
-	// Get our state
-	state, err := b.State()
-	if err != nil {
-		runningOp.Err = errwrap.Wrapf("Error loading state: {{err}}", err)
-		return
-	}
-	if err := state.RefreshState(); err != nil {
-		runningOp.Err = errwrap.Wrapf("Error loading state: {{err}}", err)
-		return
-	}
-	runningOp.State = state.State()
-
 	// Get our context
-	tfCtx, err := b.Context(op, state)
+	tfCtx, state, err := b.Context(op)
 	if err != nil {
 		runningOp.Err = err
 		return
 	}
+
+	// Set our state
+	runningOp.State = state.State()
 
 	// Perform operation and write the resulting state to the running op
 	newState, err := tfCtx.Refresh()

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform/backend"
+	"github.com/hashicorp/terraform/config/module"
 )
 
 // PlanCommand is a Command implementation that compares a Terraform
@@ -41,11 +42,25 @@ func (c *PlanCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Load the module
-	mod, err := c.Module(configPath)
+	// Check if the path is a plan
+	plan, err := c.Plan(configPath)
 	if err != nil {
-		c.Ui.Error(fmt.Sprintf("Failed to load root config module: %s", err))
+		c.Ui.Error(err.Error())
 		return 1
+	}
+	if plan != nil {
+		// Disable refreshing no matter what since we only want to show the plan
+		refresh = false
+	}
+
+	// Load the module if we don't have one yet (not running from plan)
+	var mod *module.Tree
+	if plan == nil {
+		mod, err = c.Module(configPath)
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf("Failed to load root config module: %s", err))
+			return 1
+		}
 	}
 
 	// Load the backend
@@ -59,6 +74,7 @@ func (c *PlanCommand) Run(args []string) int {
 	opReq := c.Operation()
 	opReq.Destroy = destroy
 	opReq.Module = mod
+	opReq.Plan = plan
 	opReq.PlanRefresh = refresh
 	opReq.PlanOutPath = outPath
 	opReq.Type = backend.OperationTypePlan
@@ -76,20 +92,6 @@ func (c *PlanCommand) Run(args []string) int {
 		c.Ui.Error(err.Error())
 		return 1
 	}
-
-	/*
-		if planned {
-			c.Ui.Output(c.Colorize().Color(
-				"[reset][bold][yellow]" +
-					"The plan command received a saved plan file as input. This command\n" +
-					"will output the saved plan. This will not modify the already-existing\n" +
-					"plan. If you wish to generate a new plan, please pass in a configuration\n" +
-					"directory as an argument.\n\n"))
-
-			// Disable refreshing no matter what since we only want to show the plan
-			refresh = false
-		}
-	*/
 
 	/*
 		err = terraform.SetDebugInfo(DefaultDataDir)
