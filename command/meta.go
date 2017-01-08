@@ -12,10 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/go-getter"
-	"github.com/hashicorp/terraform/config"
-	"github.com/hashicorp/terraform/config/module"
 	"github.com/hashicorp/terraform/helper/experiment"
 	"github.com/hashicorp/terraform/helper/variables"
 	"github.com/hashicorp/terraform/helper/wrappedstreams"
@@ -69,18 +66,22 @@ type Meta struct {
 	// backupPath is used to backup the state file before writing a modified
 	// version. It defaults to stateOutPath + DefaultBackupExtension
 	//
+	// backendConfigPath is used to set the configuration path for the
+	// backend configuration. This defaults to the pwd.
+	//
 	// parallelism is used to control the number of concurrent operations
 	// allowed when walking the graph
 	//
 	// shadow is used to enable/disable the shadow graph
 	//
 	// provider is to specify specific resource providers
-	statePath    string
-	stateOutPath string
-	backupPath   string
-	parallelism  int
-	shadow       bool
-	provider     string
+	statePath         string
+	stateOutPath      string
+	backupPath        string
+	backendConfigPath string
+	parallelism       int
+	shadow            bool
+	provider          string
 }
 
 // initStatePaths is used to initialize the default values for
@@ -109,103 +110,6 @@ func (m *Meta) Colorize() *colorstring.Colorize {
 		Disable: !m.color,
 		Reset:   true,
 	}
-}
-
-// Context returns a Terraform Context taking into account the context
-// options used to initialize this meta configuration.
-func (m *Meta) Context(copts contextOpts) (*terraform.Context, bool, error) {
-	opts := m.contextOpts()
-
-	// First try to just read the plan directly from the path given.
-	f, err := os.Open(copts.Path)
-	if err == nil {
-		plan, err := terraform.ReadPlan(f)
-		f.Close()
-		if err == nil {
-			// Setup our state, force it to use our plan's state
-			stateOpts := m.StateOpts()
-			if plan != nil {
-				stateOpts.ForceState = plan.State
-			}
-
-			// Get the state
-			result, err := State(stateOpts)
-			if err != nil {
-				return nil, false, fmt.Errorf("Error loading plan: %s", err)
-			}
-
-			// Set our state
-			m.state = result.State
-
-			// this is used for printing the saved location later
-			if m.stateOutPath == "" {
-				m.stateOutPath = result.StatePath
-			}
-
-			if len(m.variables) > 0 {
-				return nil, false, fmt.Errorf(
-					"You can't set variables with the '-var' or '-var-file' flag\n" +
-						"when you're applying a plan file. The variables used when\n" +
-						"the plan was created will be used. If you wish to use different\n" +
-						"variable values, create a new plan file.")
-			}
-
-			ctx, err := plan.Context(opts)
-			return ctx, true, err
-		}
-	}
-
-	// Load the statePath if not given
-	if copts.StatePath != "" {
-		m.statePath = copts.StatePath
-	}
-
-	// Tell the context if we're in a destroy plan / apply
-	opts.Destroy = copts.Destroy
-
-	// Store the loaded state
-	state, err := m.State()
-	if err != nil {
-		return nil, false, err
-	}
-
-	// Load the root module
-	var mod *module.Tree
-	if copts.Path != "" {
-		mod, err = module.NewTreeModule("", copts.Path)
-
-		// Check for the error where we have no config files but
-		// allow that. If that happens, clear the error.
-		if errwrap.ContainsType(err, new(config.ErrNoConfigsFound)) &&
-			copts.PathEmptyOk {
-			log.Printf(
-				"[WARN] Empty configuration dir, ignoring: %s", copts.Path)
-			err = nil
-			mod = module.NewEmptyTree()
-		}
-
-		if err != nil {
-			return nil, false, fmt.Errorf("Error loading config: %s", err)
-		}
-	} else {
-		mod = module.NewEmptyTree()
-	}
-
-	err = mod.Load(m.moduleStorage(m.DataDir()), copts.GetMode)
-	if err != nil {
-		return nil, false, fmt.Errorf("Error downloading modules: %s", err)
-	}
-
-	// Validate the module right away
-	if err := mod.Validate(); err != nil {
-		return nil, false, err
-	}
-
-	opts.Module = mod
-	opts.Parallelism = copts.Parallelism
-	opts.State = state.State()
-	ctx, err := terraform.NewContext(opts)
-	return ctx, false, err
 }
 
 // DataDir returns the directory where local data will be stored.
@@ -302,16 +206,6 @@ func (m *Meta) UIInput() terraform.UIInput {
 	}
 }
 
-// PersistState is used to write out the state, handling backup of
-// the existing state file and respecting path configurations.
-func (m *Meta) PersistState(s *terraform.State) error {
-	if err := m.state.WriteState(s); err != nil {
-		return err
-	}
-
-	return m.state.PersistState()
-}
-
 // StdinPiped returns true if the input is piped.
 func (m *Meta) StdinPiped() bool {
 	fi, err := wrappedstreams.Stdin().Stat()
@@ -326,10 +220,15 @@ func (m *Meta) StdinPiped() bool {
 // contextOpts returns the options to use to initialize a Terraform
 // context with the settings from this Meta.
 func (m *Meta) contextOpts() *terraform.ContextOpts {
-	var opts terraform.ContextOpts = *m.ContextOpts
+	var opts terraform.ContextOpts
+	if v := m.ContextOpts; v != nil {
+		opts = *v
+	}
 
 	opts.Hooks = []terraform.Hook{m.uiHook(), &terraform.DebugHook{}}
-	opts.Hooks = append(opts.Hooks, m.ContextOpts.Hooks...)
+	if m.ContextOpts != nil {
+		opts.Hooks = append(opts.Hooks, m.ContextOpts.Hooks...)
+	}
 	opts.Hooks = append(opts.Hooks, m.extraHooks...)
 
 	vs := make(map[string]interface{})
@@ -355,6 +254,7 @@ func (m *Meta) contextOpts() *terraform.ContextOpts {
 func (m *Meta) flagSet(n string) *flag.FlagSet {
 	f := flag.NewFlagSet(n, flag.ContinueOnError)
 	f.BoolVar(&m.input, "input", true, "input")
+	f.StringVar(&m.backendConfigPath, "backend-config", ".", "input")
 	f.Var((*variables.Flag)(&m.variables), "var", "variables")
 	f.Var((*variables.FlagFile)(&m.variables), "var-file", "variable file")
 	f.Var((*FlagStringSlice)(&m.targets), "target", "resource to target")
@@ -525,29 +425,4 @@ func (m *Meta) outputShadowError(err error, output bool) bool {
 	)))
 
 	return true
-}
-
-// contextOpts are the options used to load a context from a command.
-type contextOpts struct {
-	// Path to the directory where the root module is.
-	//
-	// PathEmptyOk, when set, will allow paths that have no Terraform
-	// configurations. The result in that case will be an empty module.
-	Path        string
-	PathEmptyOk bool
-
-	// StatePath is the path to the state file. If this is empty, then
-	// no state will be loaded. It is also okay for this to be a path to
-	// a file that doesn't exist; it is assumed that this means that there
-	// is simply no state.
-	StatePath string
-
-	// GetMode is the module.GetMode to use when loading the module tree.
-	GetMode module.GetMode
-
-	// Set to true when running a destroy plan/apply.
-	Destroy bool
-
-	// Number of concurrent operations allowed
-	Parallelism int
 }

@@ -5,8 +5,10 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/builtin/backends/local"
+	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/config/module"
 	"github.com/hashicorp/terraform/terraform"
 )
@@ -92,6 +94,11 @@ func (m *Meta) Input() bool {
 func (m *Meta) Module(path string) (*module.Tree, error) {
 	mod, err := module.NewTreeModule("", path)
 	if err != nil {
+		// Check for the error where we have no config files
+		if errwrap.ContainsType(err, new(config.ErrNoConfigsFound)) {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
