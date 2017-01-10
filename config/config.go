@@ -41,22 +41,6 @@ type Config struct {
 	unknownKeys []string
 }
 
-// Terraform is the Terraform meta-configuration that can be present
-// in configuration files for configuring Terraform itself.
-type Terraform struct {
-	RequiredVersion string   `hcl:"required_version"` // Required Terraform version (constraint)
-	Backend         *Backend // See Backend struct docs
-}
-
-// Backend is the configuration for the "backend" to use with Terraform.
-// A backend is responsible for all major behavior of Terraform's core.
-// The abstraction layer above the core (the "backend") allows for behavior
-// such as remote operation.
-type Backend struct {
-	Type      string
-	RawConfig *RawConfig
-}
-
 // AtlasConfig is the configuration for building in HashiCorp's Atlas.
 type AtlasConfig struct {
 	Name    string
