@@ -78,6 +78,11 @@ type State struct {
 	// pull and push state files from a remote storage endpoint.
 	Remote *RemoteState `json:"remote,omitempty"`
 
+	// Backend tracks the configuration for the backend in use with
+	// this state. This is used to track any changes in the backend
+	// configuration.
+	Backend *BackendState `json:"backend,omitempty"`
+
 	// Modules contains all the modules in a breadth-first order
 	Modules []*ModuleState `json:"modules"`
 
@@ -776,6 +781,12 @@ func (s *State) String() string {
 	}
 
 	return strings.TrimSpace(buf.String())
+}
+
+// BackendState stores the configuration to connect to a remote backend.
+type BackendState struct {
+	Type   string                 `json:"type"`   // Backend type
+	Config map[string]interface{} `json:"config"` // Backend raw config
 }
 
 // RemoteState is used to track the information about a remote
