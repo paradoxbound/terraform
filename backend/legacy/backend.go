@@ -48,5 +48,9 @@ func (b *Backend) Configure(c *terraform.ResourceConfig) error {
 }
 
 func (b *Backend) State() (state.State, error) {
+	if b.client == nil {
+		panic("State called with nil remote state client")
+	}
+
 	return &remote.State{Client: b.client}, nil
 }

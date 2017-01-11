@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform/terraform"
+	"github.com/mitchellh/cli"
 )
 
 // Test empty directory with no config/state creates a local state.
@@ -206,6 +207,9 @@ func TestMetaBackend_emptyLegacyRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bad: %s", err)
 	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
 	state := s.State()
 	if actual := state.String(); actual != legacyState.String() {
 		t.Fatalf("bad: %s", actual)
@@ -222,16 +226,18 @@ func TestMetaBackend_emptyLegacyRemote(t *testing.T) {
 	}
 
 	// Verify a backup doesn't exist
-	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
 		t.Fatalf("err: %s", err)
 	}
-	if _, err := os.Stat(statePath + DefaultBackupExtension); err != nil {
+	if _, err := os.Stat(statePath + DefaultBackupExtension); err == nil {
 		t.Fatalf("err: %s", err)
 	}
 }
 
 func testMetaBackend(t *testing.T, args []string) *Meta {
 	var m Meta
+	m.Ui = new(cli.MockUi)
+	m.process(args, true)
 	f := m.flagSet("test")
 	if err := f.Parse(args); err != nil {
 		t.Fatalf("bad: %s", err)

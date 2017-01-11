@@ -8,14 +8,25 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/backend"
+	backendlegacy "github.com/hashicorp/terraform/backend/legacy"
 	"github.com/hashicorp/terraform/builtin/backends/local"
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
+	"github.com/mitchellh/mapstructure"
 )
+
+// BackendOpts are the options used to initialize a backend.Backend.
+type BackendOpts struct {
+	// ConfigPath is a path to a file or directory containing the backend
+	// configuration. If "-backend-config" is set and processed on Meta,
+	// that will take priority.
+	ConfigPath string
+}
 
 // Backend initializes and returns the backend for this CLI session.
 //
@@ -214,7 +225,7 @@ func (m *Meta) backendFromConfig(
 
 	// We have a legacy remote state configuration but no new backend config
 	case c == nil && !s.Remote.Empty() && s.Backend.Empty():
-		panic("unhandled")
+		return m.backend_c_R_s(c, sMgr)
 
 	// We have a legacy remote state configuration simultaneously with a
 	// saved backend configuration while at the same time disabling backend
@@ -270,10 +281,72 @@ func (m *Meta) backendFromConfig(
 	}
 }
 
-// BackendOpts are the options used to initialize a backend.Backend.
-type BackendOpts struct {
-	// ConfigPath is a path to a file or directory containing the backend
-	// configuration. If "-backend-config" is set and processed on Meta,
-	// that will take priority.
-	ConfigPath string
+//-------------------------------------------------------------------
+// Backend Config Scenarios
+//
+// The functions below cover handling all the various scenarios that
+// can exist when loading a backend. They are named in the format of
+// "backend_C_R_S" where C, R, S may be upper or lowercase. Lowercase
+// means it is false, uppercase means it is true. The full set of eight
+// possible cases is handled.
+//
+// The fields are:
+//
+//   * C - Backend configuration is set and changed in TF files
+//   * R - Legacy remote state is set
+//   * S - Backend configuration is set in the state
+//
+//-------------------------------------------------------------------
+
+func (m *Meta) backend_c_R_s(
+	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+	s := sMgr.State()
+
+	// Warn the user
+	m.Ui.Warn(strings.TrimSpace(warnBackendLegacy))
+
+	// We need to convert the config to map[string]interface{} since that
+	// is what the backends expect.
+	var configMap map[string]interface{}
+	if err := mapstructure.Decode(s.Remote.Config, &configMap); err != nil {
+		return nil, fmt.Errorf("Error configuring remote state: %s", err)
+	}
+
+	// Create the config
+	rawC, err := config.NewRawConfig(configMap)
+	if err != nil {
+		return nil, fmt.Errorf("Error configuring remote state: %s", err)
+	}
+	config := terraform.NewResourceConfig(rawC)
+
+	// Initialize the legacy remote backend
+	b := &backendlegacy.Backend{Type: s.Remote.Type}
+
+	// Configure
+	if err := b.Configure(config); err != nil {
+		return nil, fmt.Errorf(errBackendLegacyConfig, err)
+	}
+
+	return b, nil
 }
+
+const errBackendLegacyConfig = `
+One or more errors occurred while configuring the legacy remote state.
+If fixing these errors requires changing your remote state configuration,
+you must switch your configuration to the new remote backend configuration.
+You can learn more about remote backends at the URL below:
+
+TODO: URL
+
+The error(s) configuring the legacy remote state:
+
+%s
+`
+
+const warnBackendLegacy = `
+Deprecation warning: This environment is configured to use legacy remote state.
+Remote state changed significantly in Terraform 0.9. Please update your remote
+state configuration to use the new 'backend' settings. For now, Terraform
+will continue to use your existing settings. Legacy remote state support
+will be removed in Terraform 0.11.
+`
