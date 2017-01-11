@@ -140,15 +140,27 @@ func (c *InitCommand) Run(args []string) int {
 
 func (c *InitCommand) Help() string {
 	helpText := `
-Usage: terraform init [options] SOURCE [PATH]
+Usage: terraform init [options] [SOURCE] [PATH]
 
-  Downloads the module given by SOURCE into the PATH. The PATH defaults
-  to the working directory. PATH must be empty of any Terraform files.
-  Any conflicting non-Terraform files will be overwritten.
+  Initialize a new or existing Terraform environment by creating
+  initial files, loading any remote state, downloading modules, etc.
 
-  The module downloaded is a copy. If you're downloading a module from
-  Git, it will not preserve the Git history, it will only copy the
-  latest files.
+  This is the first command that should be run for any new or existing
+  Terraform configuration per machine. This sets up all the local data
+  necessary to run Terraform that is typically not comitted to version
+  control.
+
+  If no arguments are given, the configuration in this working directory
+  is initialized. If one argument is given, the configuration in the directory
+  specified as the argument is initialized.
+
+  If two arguments are given, the first is a SOURCE of a module to download
+  to the second argument PATH. After downloading the module to PATH, the
+  configuration will be initialized as if this command were called pointing
+  only to that PATH. PATH must be empty of any Terraform files. Any
+  conflicting non-Terraform files will be overwritten. The module download
+  is a copy. If you're downloading a module from Git, it will not preserve
+  Git history.
 
 Options:
 
@@ -165,5 +177,5 @@ Options:
 }
 
 func (c *InitCommand) Synopsis() string {
-	return "Initializes Terraform configuration from a module"
+	return "Initialize a new or existing Terraform configuration"
 }

@@ -1,21 +1,21 @@
 package command
 
+// This file contains all the Backend-related function calls on Meta,
+// exported and private.
+
 import (
 	"fmt"
+	"log"
 	"os"
-	"strconv"
+	"path/filepath"
 
 	"github.com/hashicorp/errwrap"
 	"github.com/hashicorp/terraform/backend"
 	"github.com/hashicorp/terraform/builtin/backends/local"
 	"github.com/hashicorp/terraform/config"
-	"github.com/hashicorp/terraform/config/module"
+	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
 )
-
-// NOTE: This is a temporary file during the backend branch. This will be
-// merged back into meta.go when the work here is done. This just helps keep
-// track of what we're adding.
 
 // Backend initializes and returns the backend for this CLI session.
 //
@@ -27,6 +27,11 @@ import (
 // This will initialize a new backend for each call, which can carry some
 // overhead with it. Please reuse the returned value for optimal behavior.
 func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
+	// If no opts are set, then initialize
+	if opts == nil {
+		opts = &BackendOpts{}
+	}
+
 	// Setup the local state paths
 	statePath := m.statePath
 	stateOutPath := m.stateOutPath
@@ -45,7 +50,42 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
 		backupPath = ""
 	}
 
-	// TODO: "legacy" remote state
+	// Get the local backend configuration.
+	config, err := m.backendConfig(opts)
+	if err != nil {
+		return nil, fmt.Errorf("Error loading backend config: %s", err)
+	}
+
+	// Get the path to where we store a local cache of backend configuration
+	// if we're using a remote backend. This may not yet exist which means
+	// we haven't used a non-local backend before. That is okay.
+	dataStatePath := filepath.Join(m.DataDir(), DefaultStateFilename)
+	dataStateMgr := &state.LocalState{Path: dataStatePath}
+	if err := dataStateMgr.RefreshState(); err != nil {
+		return nil, fmt.Errorf("Error loading state: %s", err)
+	}
+
+	// Get the final backend configuration to use. This will handle any
+	// conflicts (legacy remote state, new config, config changes, etc.)
+	// and only return the final configuration to use.
+	b, err := m.backendFromConfig(config, dataStateMgr)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("[INFO] command: backend initialized: %T", b)
+
+	// If the result of loading the backend is an enhanced backend,
+	// then return that as-is. This works even if b == nil (it will be !ok).
+	if enhanced, ok := b.(backend.Enhanced); ok {
+		return enhanced, nil
+	}
+
+	// We either have a non-enhanced backend or no backend configured at
+	// all. In either case, we use local as our enhanced backend and the
+	// non-enhanced (if any) as the state backend.
+
+	log.Printf("[INFO] command: backend %T is not enhanced, wrapping in local", b)
 
 	// Build the local backend
 	return &local.Local{
@@ -57,6 +97,7 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
 		ContextOpts:     m.contextOpts(),
 		Input:           m.Input(),
 		Validation:      true,
+		Backend:         b,
 	}, nil
 }
 
@@ -72,96 +113,167 @@ func (m *Meta) Operation() *backend.Operation {
 	}
 }
 
-// Input returns whether or not input asking is enabled.
-func (m *Meta) Input() bool {
-	if test || !m.input {
-		return false
+// backendConfig returns the local configuration for the backend
+func (m *Meta) backendConfig(opts *BackendOpts) (*config.Backend, error) {
+	// If no explicit path was given then it is okay for there to be
+	// no backend configuration found.
+	emptyOk := opts.ConfigPath == "" && m.backendConfigPath == ""
+
+	// Determine the path to the configuration. If the "-backend-config"
+	// flag was set, that always takes priority.
+	path := opts.ConfigPath
+	if m.backendConfigPath != "" {
+		path = m.backendConfigPath
 	}
 
-	if envVar := os.Getenv(InputModeEnvVar); envVar != "" {
-		if v, err := strconv.ParseBool(envVar); err == nil && !v {
-			return false
+	// If we had no path set, it is an error. We can't initialize unset
+	if path == "" {
+		path = "."
+	}
+
+	// Expand the path
+	if !filepath.IsAbs(path) {
+		var err error
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"Error expanding path to backend config %q: %s", path, err)
 		}
 	}
 
-	return true
-}
+	log.Printf("[DEBUG] command: loading backend config file: %s", path)
 
-// Module loads the module tree for the given root path.
-//
-// It expects the modules to already be downloaded. This will never
-// download any modules.
-func (m *Meta) Module(path string) (*module.Tree, error) {
-	mod, err := module.NewTreeModule("", path)
+	// We first need to determine if we're loading a file or a directory.
+	fi, err := os.Stat(path)
 	if err != nil {
-		// Check for the error where we have no config files
-		if errwrap.ContainsType(err, new(config.ErrNoConfigsFound)) {
+		if os.IsNotExist(err) && emptyOk {
+			log.Printf(
+				"[INFO] command: backend config not found, returning nil: %s",
+				path)
 			return nil, nil
 		}
 
 		return nil, err
 	}
 
-	err = mod.Load(m.moduleStorage(m.DataDir()), module.GetModeNone)
-	if err != nil {
-		return nil, fmt.Errorf("Error loading modules: %s", err)
-	}
-
-	return mod, nil
-}
-
-// Plan returns the plan for the given path.
-//
-// This only has an effect if the path itself looks like a plan.
-// If error is nil and the plan is nil, then the path didn't look like
-// a plan.
-//
-// Error will be non-nil if path looks like a plan and loading the plan
-// failed.
-func (m *Meta) Plan(path string) (*terraform.Plan, error) {
-	// Open the path no matter if its a directory or file
-	f, err := os.Open(path)
-	defer f.Close()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"Failed to load Terraform configuration or plan: %s", err)
-	}
-
-	// Stat it so we can check if its a directory
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf(
-			"Failed to load Terraform configuration or plan: %s", err)
-	}
-
-	// If this path is a directory, then it can't be a plan. Not an error.
+	var f func(string) (*config.Config, error) = config.LoadFile
 	if fi.IsDir() {
-		return nil, nil
+		f = config.LoadDir
 	}
 
-	// Read the plan
-	p, err := terraform.ReadPlan(f)
+	// Load the configuration
+	c, err := f(path)
 	if err != nil {
+		// Check for the error where we have no config files and return nil
+		// as the configuration type.
+		if emptyOk && errwrap.ContainsType(err, new(config.ErrNoConfigsFound)) {
+			log.Printf(
+				"[INFO] command: backend config not found, returning nil: %s",
+				path)
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
-	// We do a validation here that seems odd but if any plan is given,
-	// we must not have set any extra variables. The plan itself contains
-	// the variables and those aren't overwritten.
-	if len(m.variables) > 0 {
-		return nil, fmt.Errorf(
-			"You can't set variables with the '-var' or '-var-file' flag\n" +
-				"when you're applying a plan file. The variables used when\n" +
-				"the plan was created will be used. If you wish to use different\n" +
-				"variable values, create a new plan file.")
+	// If there is no Terraform configuration block, no backend config
+	if c.Terraform == nil {
+		return nil, nil
 	}
 
-	return p, nil
+	// Return the configuration which may or may not be set
+	return c.Terraform.Backend, nil
+}
+
+// backendFromConfig returns the initialized (not configured) backend
+// directly from the config/state..
+//
+// This function handles any edge cases around backend config loading. For
+// example: legacy remote state, new config changes, backend type changes,
+// etc.
+//
+// This function may query the user for input unless input is disabled, in
+// which case this function will error.
+func (m *Meta) backendFromConfig(
+	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+	// Load the state, it must be non-nil for the tests below but can be empty
+	s := sMgr.State()
+	if s == nil {
+		log.Printf("[DEBUG] command: no data state file found for backend config")
+		s = terraform.NewState()
+	}
+
+	switch {
+	// No configuration set at all. Pure local state.
+	case c == nil && s.Remote.Empty() && s.Backend.Empty():
+		return nil, nil
+
+	// We're unsetting a backend (moving from backend => local)
+	case c == nil && s.Remote.Empty() && !s.Backend.Empty():
+		panic("unhandled")
+
+	// We have a legacy remote state configuration but no new backend config
+	case c == nil && !s.Remote.Empty() && s.Backend.Empty():
+		panic("unhandled")
+
+	// We have a legacy remote state configuration simultaneously with a
+	// saved backend configuration while at the same time disabling backend
+	// configuration.
+	//
+	// This is a naturally impossible case: Terraform will never put you
+	// in this state, though it is theoretically possible through manual edits
+	case c == nil && !s.Remote.Empty() && !s.Backend.Empty():
+		panic("unhandled")
+
+	// Configuring a backend for the first time.
+	case c != nil && s.Remote.Empty() && s.Backend.Empty():
+		fallthrough
+
+	// Potentially changing a backend configuration
+	case c != nil && s.Remote.Empty() && !s.Backend.Empty():
+		// If our configuration is the same, then we're just initializing
+		// a previously configured remote backend.
+		if !s.Backend.Empty() && s.Backend.Hash == c.Hash() {
+			panic("unhandled")
+		}
+
+		panic("unhandled")
+
+	// Configuring a backend for the first time while having legacy
+	// remote state. This is very possible if a Terraform user configures
+	// a backend prior to ever running Terraform on an old state.
+	case c != nil && !s.Remote.Empty() && s.Backend.Empty():
+		panic("unhandled")
+
+	// Configuring a backend with both a legacy remote state set
+	// and a pre-existing backend saved.
+	case c != nil && !s.Remote.Empty() && !s.Backend.Empty():
+		// If the hashes are the same, we have a legacy remote state with
+		// an unchanged stored backend state.
+		if s.Backend.Hash == c.Hash() {
+			panic("unhandled")
+		}
+
+		// We have change in all three
+		panic("unhandled")
+	default:
+		// This should be impossible since all state possibilties are
+		// tested above, but we need a default case anyways and we should
+		// protect against the scenario where a case is somehow removed.
+		return nil, fmt.Errorf(
+			"Unhandled backend configuration state. This is a bug. Please\n"+
+				"report this error with the following information.\n\n"+
+				"Config Nil: %v\n"+
+				"Saved Backend Empty: %v\n"+
+				"Legacy Remote Empty: %v\n",
+			c == nil, s.Backend.Empty(), s.Remote.Empty())
+	}
 }
 
 // BackendOpts are the options used to initialize a backend.Backend.
 type BackendOpts struct {
-	// Nothing at the moment, but experience has shown that something
-	// will likely be useful here in the future. To avoid API changes,
-	// we'll set this up now.
+	// ConfigPath is a path to a file or directory containing the backend
+	// configuration. If "-backend-config" is set and processed on Meta,
+	// that will take priority.
+	ConfigPath string
 }

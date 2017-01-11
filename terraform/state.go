@@ -787,6 +787,16 @@ func (s *State) String() string {
 type BackendState struct {
 	Type   string                 `json:"type"`   // Backend type
 	Config map[string]interface{} `json:"config"` // Backend raw config
+
+	// Hash is the hash code to uniquely identify the original source
+	// configuration. We use this to detect when there is a change in
+	// configuration even when "type" isn't changed.
+	Hash uint64 `json:"hash"`
+}
+
+// Empty returns true if BackendState has no state.
+func (s *BackendState) Empty() bool {
+	return s == nil || s.Type == ""
 }
 
 // RemoteState is used to track the information about a remote

@@ -254,7 +254,7 @@ func (m *Meta) contextOpts() *terraform.ContextOpts {
 func (m *Meta) flagSet(n string) *flag.FlagSet {
 	f := flag.NewFlagSet(n, flag.ContinueOnError)
 	f.BoolVar(&m.input, "input", true, "input")
-	f.StringVar(&m.backendConfigPath, "backend-config", ".", "input")
+	f.StringVar(&m.backendConfigPath, "backend-config", "", "input")
 	f.Var((*variables.Flag)(&m.variables), "var", "variables")
 	f.Var((*variables.FlagFile)(&m.variables), "var-file", "variable file")
 	f.Var((*FlagStringSlice)(&m.targets), "target", "resource to target")
