@@ -261,7 +261,7 @@ func (m *Meta) backendFromConfig(
 			return m.backend_C_r_S_unchanged(c, sMgr)
 		}
 
-		return m.backend_C_r_S_changed(c, sMgr)
+		return m.backend_C_r_S_changed(c, sMgr, true)
 
 	// Configuring a backend for the first time while having legacy
 	// remote state. This is very possible if a Terraform user configures
@@ -275,11 +275,11 @@ func (m *Meta) backendFromConfig(
 		// If the hashes are the same, we have a legacy remote state with
 		// an unchanged stored backend state.
 		if s.Backend.Hash == c.Hash() {
-			return m.backend_C_R_S_unchanged(c, sMgr)
+			return m.backend_C_R_S_unchanged(c, sMgr, true)
 		}
 
 		// We have change in all three
-		panic("unhandled")
+		return m.backend_C_R_S_changed(c, sMgr)
 	default:
 		// This should be impossible since all state possibilties are
 		// tested above, but we need a default case anyways and we should
@@ -610,11 +610,13 @@ func (m *Meta) backend_C_r_s(
 
 // Changing a previously saved backend.
 func (m *Meta) backend_C_r_S_changed(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
-	// Notify the user
-	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
-		"[reset]%s\n\n",
-		strings.TrimSpace(outputBackendReconfigure))))
+	c *config.Backend, sMgr state.State, output bool) (backend.Backend, error) {
+	if output {
+		// Notify the user
+		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+			"[reset]%s\n\n",
+			strings.TrimSpace(outputBackendReconfigure))))
+	}
 
 	// Get the backend
 	b, err := m.backendInitFromConfig(c)
@@ -690,9 +692,11 @@ func (m *Meta) backend_C_r_S_changed(
 		return nil, fmt.Errorf(errBackendWriteSaved, err)
 	}
 
-	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
-		"[reset][green]%s\n\n",
-		strings.TrimSpace(successBackendSet), s.Backend.Type)))
+	if output {
+		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+			"[reset][green]%s\n\n",
+			strings.TrimSpace(successBackendSet), s.Backend.Type)))
+	}
 
 	return b, nil
 }
@@ -726,13 +730,42 @@ func (m *Meta) backend_C_r_S_unchanged(
 	return b, nil
 }
 
-// Initiailizing an unchanged saved backend with legacy remote state.
-func (m *Meta) backend_C_R_S_unchanged(
+// Initiailizing a changed saved backend with legacy remote state.
+func (m *Meta) backend_C_R_S_changed(
 	c *config.Backend, sMgr state.State) (backend.Backend, error) {
 	// Notify the user
 	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
 		"[reset]%s\n\n",
-		strings.TrimSpace(outputBackendSavedWithLegacy))))
+		strings.TrimSpace(outputBackendSavedWithLegacyChanged))))
+
+	// Reconfigure the backend first
+	if _, err := m.backend_C_r_S_changed(c, sMgr, false); err != nil {
+		return nil, err
+	}
+
+	// Handle the case where we have all set but unchanged
+	b, err := m.backend_C_R_S_unchanged(c, sMgr, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Output success message
+	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+		"[reset][green]%s\n\n",
+		strings.TrimSpace(successBackendReconfigureWithLegacy), c.Type)))
+
+	return b, nil
+}
+
+// Initiailizing an unchanged saved backend with legacy remote state.
+func (m *Meta) backend_C_R_S_unchanged(
+	c *config.Backend, sMgr state.State, output bool) (backend.Backend, error) {
+	if output {
+		// Notify the user
+		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+			"[reset]%s\n\n",
+			strings.TrimSpace(outputBackendSavedWithLegacy))))
+	}
 
 	// Load the backend from the state
 	s := sMgr.State()
@@ -805,9 +838,11 @@ func (m *Meta) backend_C_R_S_unchanged(
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
 	}
 
-	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
-		"[reset][green]%s\n\n",
-		strings.TrimSpace(successBackendLegacyUnset), s.Backend.Type)))
+	if output {
+		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+			"[reset][green]%s\n\n",
+			strings.TrimSpace(successBackendLegacyUnset), s.Backend.Type)))
+	}
 
 	return b, nil
 }
@@ -1100,9 +1135,24 @@ also having a backend configured. Terraform will now ask if you want to
 migrate your legacy remote state data to the configured backend.
 `
 
+const outputBackendSavedWithLegacyChanged = `
+[reset][bold]Legacy remote state was detected while also changing your current backend!reset]
+
+Terraform has detected that you have legacy remote state, a configured
+current backend, and you're attempting to reconfigure your backend. To handle
+all of these changes, Terraform will first reconfigure your backend. After
+this, Terraform will handle optionally copying your legacy remote state
+into the newly configured backend.
+`
+
 const successBackendLegacyUnset = `
 Terraform has successfully migrated from legacy remote state to your
 configured remote state.
+`
+
+const successBackendReconfigureWithLegacy = `
+Terraform has successfully reconfigured your backend and migrate
+from legacy remote state to the new backend.
 `
 
 const successBackendUnset = `
