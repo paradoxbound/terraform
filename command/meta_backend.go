@@ -234,7 +234,7 @@ func (m *Meta) backendFromConfig(
 
 	// We're unsetting a backend (moving from backend => local)
 	case c == nil && s.Remote.Empty() && !s.Backend.Empty():
-		return m.backend_c_r_S(c, sMgr)
+		return m.backend_c_r_S(c, sMgr, true)
 
 	// We have a legacy remote state configuration but no new backend config
 	case c == nil && !s.Remote.Empty() && s.Backend.Empty():
@@ -247,7 +247,7 @@ func (m *Meta) backendFromConfig(
 	// This is a naturally impossible case: Terraform will never put you
 	// in this state, though it is theoretically possible through manual edits
 	case c == nil && !s.Remote.Empty() && !s.Backend.Empty():
-		panic("unhandled")
+		return m.backend_c_R_S(c, sMgr)
 
 	// Configuring a backend for the first time.
 	case c != nil && s.Remote.Empty() && s.Backend.Empty():
@@ -313,8 +313,11 @@ func (m *Meta) backendFromConfig(
 
 // Unconfiguring a backend (moving from backend => local).
 func (m *Meta) backend_c_r_S(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+	c *config.Backend, sMgr state.State, output bool) (backend.Backend, error) {
 	s := sMgr.State()
+
+	// Get the backend type for output
+	backendType := s.Backend.Type
 
 	// Confirm with the user that the copy should occur
 	copy, err := m.confirm(&terraform.InputOpts{
@@ -371,16 +374,19 @@ func (m *Meta) backend_c_r_S(
 	}
 
 	// Remove the stored metadata
-	if err := sMgr.WriteState(nil); err != nil {
+	s.Backend = nil
+	if err := sMgr.WriteState(s); err != nil {
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearSaved), err)
 	}
 	if err := sMgr.PersistState(); err != nil {
 		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearSaved), err)
 	}
 
-	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
-		"[reset][green]%s\n\n",
-		strings.TrimSpace(successBackendUnset), s.Backend.Type)))
+	if output {
+		m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+			"[reset][green]%s\n\n",
+			strings.TrimSpace(successBackendUnset), backendType)))
+	}
 
 	// Return no backend
 	return nil, nil
@@ -417,6 +423,100 @@ func (m *Meta) backend_c_R_s(
 	}
 
 	return b, nil
+}
+
+// Unsetting backend, saved backend, legacy remote state
+func (m *Meta) backend_c_R_S(
+	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+	// Notify the user
+	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+		"[reset]%s\n\n",
+		strings.TrimSpace(outputBackendUnsetWithLegacy))))
+
+	// Get the backend type for later
+	backendType := sMgr.State().Backend.Type
+
+	// First, perform the configured => local tranasition
+	if _, err := m.backend_c_r_S(c, sMgr, false); err != nil {
+		return nil, err
+	}
+
+	// Grab a purely local backend
+	localB, err := m.Backend(&BackendOpts{ForceLocal: true})
+	if err != nil {
+		return nil, fmt.Errorf(errBackendLocalRead, err)
+	}
+	localState, err := localB.State()
+	if err != nil {
+		return nil, fmt.Errorf(errBackendLocalRead, err)
+	}
+	if err := localState.RefreshState(); err != nil {
+		return nil, fmt.Errorf(errBackendLocalRead, err)
+	}
+
+	// Grab the state
+	s := sMgr.State()
+
+	// Ask the user if they want to migrate their existing remote state
+	copy, err := m.confirm(&terraform.InputOpts{
+		Id: "backend-migrate-to-new",
+		Query: fmt.Sprintf(
+			"Do you want to copy the legacy remote state from %q?",
+			s.Remote.Type),
+		Description: strings.TrimSpace(inputBackendMigrateLegacyLocal),
+	})
+	if err != nil {
+		return nil, fmt.Errorf(
+			"Error asking for state copy action: %s", err)
+	}
+
+	// If the user wants a copy, copy!
+	if copy {
+		// Initialize the legacy backend
+		oldB, err := m.backendInitFromLegacy(s.Remote)
+		if err != nil {
+			return nil, err
+		}
+		oldState, err := oldB.State()
+		if err != nil {
+			return nil, fmt.Errorf(
+				strings.TrimSpace(errBackendSavedUnsetConfig), s.Backend.Type, err)
+		}
+		if err := oldState.RefreshState(); err != nil {
+			return nil, fmt.Errorf(
+				strings.TrimSpace(errBackendSavedUnsetConfig), s.Backend.Type, err)
+		}
+
+		// Perform the migration
+		err = m.backendMigrateState(&backendMigrateOpts{
+			OneType: s.Remote.Type,
+			TwoType: "local",
+			One:     oldState,
+			Two:     localState,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Unset the remote state
+	s = sMgr.State()
+	if s == nil {
+		s = terraform.NewState()
+	}
+	s.Remote = nil
+	if err := sMgr.WriteState(s); err != nil {
+		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
+	}
+	if err := sMgr.PersistState(); err != nil {
+		return nil, fmt.Errorf(strings.TrimSpace(errBackendClearLegacy), err)
+	}
+
+	m.Ui.Output(m.Colorize().Color(fmt.Sprintf(
+		"[reset][green]%s\n\n",
+		strings.TrimSpace(successBackendUnset), backendType)))
+
+	return nil, nil
 }
 
 // Configuring a backend for the first time with legacy remote state.
@@ -1103,6 +1203,11 @@ Terraform can copy the existing state in your legacy remote state
 backend to your newly configured backend. Please answer "yes" or "no".
 `
 
+const inputBackendMigrateLegacyLocal = `
+Terraform can copy the existing state in your legacy remote state
+backend to your local state. Please answer "yes" or "no".
+`
+
 const inputBackendMigrateLocal = `
 Terraform has detected you're unconfiguring your previously set backend.
 Would you like to copy the state from %q to local state? Please answer
@@ -1143,6 +1248,17 @@ current backend, and you're attempting to reconfigure your backend. To handle
 all of these changes, Terraform will first reconfigure your backend. After
 this, Terraform will handle optionally copying your legacy remote state
 into the newly configured backend.
+`
+
+const outputBackendUnsetWithLegacy = `
+[reset][bold]Detected a request to unset the backend with legacy remote state present![reset]
+
+Terraform has detected that you're attempting to unset a previously configured
+backend (by not having the "backend" configuration set in your Terraform files).
+At the same time, legacy remote state was detected. To handle this complex
+scenario, Terraform will first unset your configured backend, and then
+ask you how to handle the legacy remote state. This will be multi-step
+process.
 `
 
 const successBackendLegacyUnset = `

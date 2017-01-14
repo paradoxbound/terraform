@@ -39,3 +39,5 @@ website/vendor
 !command/test-fixtures/backend-unchanged-with-legacy/.terraform/terraform.tfstate
 !command/test-fixtures/backend-unset/.terraform/
 !command/test-fixtures/backend-unset/.terraform/terraform.tfstate
+!command/test-fixtures/backend-unset-with-legacy/.terraform/
+!command/test-fixtures/backend-unset-with-legacy/.terraform/terraform.tfstate

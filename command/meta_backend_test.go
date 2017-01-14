@@ -953,9 +953,25 @@ func TestMetaBackend_configuredUnset(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	// Verify no backend state was made
-	if _, err := os.Stat(filepath.Join(m.DataDir(), DefaultStateFilename)); err == nil {
-		t.Fatalf("err: %s", err)
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if !actual.Remote.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+		if !actual.Backend.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
 	}
 
 	// Write some state
@@ -1016,9 +1032,25 @@ func TestMetaBackend_configuredUnsetCopy(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 
-	// Verify no backend state was made
-	if _, err := os.Stat(filepath.Join(m.DataDir(), DefaultStateFilename)); err == nil {
-		t.Fatalf("err: %s", err)
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if !actual.Remote.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+		if !actual.Backend.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
 	}
 
 	// Write some state
@@ -1649,6 +1681,390 @@ func TestMetaBackend_configuredChangedLegacyCopyBoth(t *testing.T) {
 
 	// Verify no local backup
 	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+}
+
+// Saved backend state, unset config, legacy remote state
+func TestMetaBackend_configuredUnsetWithLegacyNoCopy(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-unset-with-legacy"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Ask input
+	defer testInteractiveInput(t, []string{"no", "no"})()
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	b, err := m.Backend(nil)
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Check the state
+	s, err := b.State()
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	state := s.State()
+	if state != nil {
+		t.Fatal("state should be nil")
+	}
+
+	// Verify the default paths dont exist since we had no state
+	if _, err := os.Stat(DefaultStateFilename); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify a backup doesn't exist
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if !actual.Remote.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+		if !actual.Backend.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Write some state
+	state = terraform.NewState()
+	state.Lineage = "changing"
+	s.WriteState(state)
+	if err := s.PersistState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify the state is where we expect
+	{
+		f, err := os.Open(DefaultStateFilename)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if actual.Lineage != state.Lineage {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+}
+
+// Saved backend state, unset config, legacy remote state
+func TestMetaBackend_configuredUnsetWithLegacyCopyBackend(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-unset-with-legacy"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Ask input
+	defer testInteractiveInput(t, []string{"yes", "yes", "no"})()
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	b, err := m.Backend(nil)
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Check the state
+	s, err := b.State()
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	state := s.State()
+	if state == nil {
+		t.Fatal("state is nil")
+	}
+	if state.Lineage != "backend" {
+		t.Fatalf("bad: %#v", state)
+	}
+
+	// Verify the default paths exist
+	if _, err := os.Stat(DefaultStateFilename); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify a backup doesn't exist
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if !actual.Remote.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+		if !actual.Backend.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Write some state
+	state = terraform.NewState()
+	state.Lineage = "changing"
+	s.WriteState(state)
+	if err := s.PersistState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify the state is where we expect
+	{
+		f, err := os.Open(DefaultStateFilename)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if actual.Lineage != state.Lineage {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Verify a local backup
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+}
+
+// Saved backend state, unset config, legacy remote state
+func TestMetaBackend_configuredUnsetWithLegacyCopyLegacy(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-unset-with-legacy"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Ask input
+	defer testInteractiveInput(t, []string{"no", "yes", "yes"})()
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	b, err := m.Backend(nil)
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Check the state
+	s, err := b.State()
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	state := s.State()
+	if state == nil {
+		t.Fatal("state is nil")
+	}
+	if state.Lineage != "legacy" {
+		t.Fatalf("bad: %#v", state)
+	}
+
+	// Verify the default paths exist
+	if _, err := os.Stat(DefaultStateFilename); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify a backup doesn't exist
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if !actual.Remote.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+		if !actual.Backend.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Write some state
+	state = terraform.NewState()
+	state.Lineage = "changing"
+	s.WriteState(state)
+	if err := s.PersistState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify the state is where we expect
+	{
+		f, err := os.Open(DefaultStateFilename)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if actual.Lineage != state.Lineage {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Verify a local backup
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+}
+
+// Saved backend state, unset config, legacy remote state
+func TestMetaBackend_configuredUnsetWithLegacyCopyBoth(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-unset-with-legacy"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Ask input
+	defer testInteractiveInput(t, []string{"yes", "yes", "yes", "yes"})()
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	b, err := m.Backend(nil)
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Check the state
+	s, err := b.State()
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	state := s.State()
+	if state == nil {
+		t.Fatal("state is nil")
+	}
+	if state.Lineage != "legacy" {
+		t.Fatalf("bad: %#v", state)
+	}
+
+	// Verify the default paths exist
+	if _, err := os.Stat(DefaultStateFilename); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify a backup exists
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if !actual.Remote.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+		if !actual.Backend.Empty() {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Write some state
+	state = terraform.NewState()
+	state.Lineage = "changing"
+	s.WriteState(state)
+	if err := s.PersistState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify the state is where we expect
+	{
+		f, err := os.Open(DefaultStateFilename)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if actual.Lineage != state.Lineage {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Verify a local backup
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 }
