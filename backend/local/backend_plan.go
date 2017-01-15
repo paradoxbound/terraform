@@ -70,6 +70,9 @@ func (b *Local) opPlan(
 
 	// Save the plan to disk
 	if path := op.PlanOutPath; path != "" {
+		// Write the backend if we have one
+		plan.Backend = op.PlanOutBackend
+
 		log.Printf("[INFO] backend/local: writing plan output to: %s", path)
 		f, err := os.Create(path)
 		if err == nil {

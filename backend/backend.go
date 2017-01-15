@@ -76,10 +76,12 @@ type Operation struct {
 	// PlanId is an opaque value that backends can use to execute a specific
 	// plan for an apply operation.
 	//
-	// PlanPath can be specified as a path to a plan file.
-	PlanId      string
-	PlanRefresh bool   // PlanRefresh will do a refresh before a plan
-	PlanOutPath string // PlanOutPath is the path to save the plan
+	// PlanOutBackend is the backend to store with the plan. This is the
+	// backend that will be used when applying the plan.
+	PlanId         string
+	PlanRefresh    bool   // PlanRefresh will do a refresh before a plan
+	PlanOutPath    string // PlanOutPath is the path to save the plan
+	PlanOutBackend *terraform.BackendState
 
 	// Module settings specify the root module to use for operations.
 	Module *module.Tree

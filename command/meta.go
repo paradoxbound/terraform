@@ -25,20 +25,23 @@ import (
 
 // Meta are the meta-options that are available on all or most commands.
 type Meta struct {
-	Color       bool
-	ContextOpts *terraform.ContextOpts
-	Ui          cli.Ui
+	// The exported fields below should be set by anyone using a
+	// command with a Meta field. These are expected to be set externally
+	// (not from within the command itself).
 
-	// State read when calling `Context`. This is available after calling
-	// `Context`.
-	state       state.State
-	stateResult *StateResult
+	Color       bool                   // True if output should be colored
+	ContextOpts *terraform.ContextOpts // Opts copied to initialize
+	Ui          cli.Ui                 // Ui for output
 
-	// This can be set by the command itself to provide extra hooks.
-	extraHooks []terraform.Hook
+	// ExtraHooks are extra hooks to add to the context.
+	ExtraHooks []terraform.Hook
 
-	// This can be set by tests to change some directories
-	dataDir string
+	//----------------------------------------------------------
+	// Private: do not set these
+	//----------------------------------------------------------
+
+	// backendState is the currently active backend state
+	backendState *terraform.BackendState
 
 	// Variables for the context (private)
 	autoKey       string
@@ -49,6 +52,7 @@ type Meta struct {
 	// Targets for this context (private)
 	targets []string
 
+	// Internal fields
 	color bool
 	oldUi cli.Ui
 
@@ -83,6 +87,22 @@ type Meta struct {
 	parallelism       int
 	shadow            bool
 	provider          string
+
+	//----------------------------------------------------------
+	// Test: the fields below are only used for unit tests
+	//----------------------------------------------------------
+
+	// This can be set by tests to change some directories
+	dataDir string
+
+	//----------------------------------------------------------
+	// TODO: REMOVE
+	//----------------------------------------------------------
+
+	// State read when calling `Context`. This is available after calling
+	// `Context`.
+	state       state.State
+	stateResult *StateResult
 }
 
 // initStatePaths is used to initialize the default values for
@@ -230,7 +250,7 @@ func (m *Meta) contextOpts() *terraform.ContextOpts {
 	if m.ContextOpts != nil {
 		opts.Hooks = append(opts.Hooks, m.ContextOpts.Hooks...)
 	}
-	opts.Hooks = append(opts.Hooks, m.extraHooks...)
+	opts.Hooks = append(opts.Hooks, m.ExtraHooks...)
 
 	vs := make(map[string]interface{})
 	for k, v := range opts.Variables {

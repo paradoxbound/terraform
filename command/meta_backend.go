@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/terraform/backend"
 	backendlegacy "github.com/hashicorp/terraform/backend/legacy"
-	backendlocal "github.com/hashicorp/terraform/builtin/backends/local"
+	backendlocal "github.com/hashicorp/terraform/backend/local"
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/state"
 	"github.com/hashicorp/terraform/terraform"
@@ -27,6 +27,10 @@ type BackendOpts struct {
 	// configuration. If "-backend-config" is set and processed on Meta,
 	// that will take priority.
 	ConfigPath string
+
+	// Plan is a plan that is being used. If this is set, the backend
+	// configuration and output configuration will come from this plan.
+	Plan *terraform.Plan
 
 	// ForceLocal will force a purely local backend, including state.
 	// You probably don't want to set this.
@@ -42,6 +46,11 @@ type BackendOpts struct {
 //
 // This will initialize a new backend for each call, which can carry some
 // overhead with it. Please reuse the returned value for optimal behavior.
+//
+// Only one backend should be used per Meta. This function is stateful
+// and is unsafe to create multiple backends used at once. This function
+// can be called multiple times with each backend being "live" (usable)
+// one at a time.
 func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
 	// If no opts are set, then initialize
 	if opts == nil {
@@ -70,25 +79,15 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
 	// local operation.
 	var b backend.Backend
 	if !opts.ForceLocal {
-		// Get the local backend configuration.
-		config, err := m.backendConfig(opts)
-		if err != nil {
-			return nil, fmt.Errorf("Error loading backend config: %s", err)
-		}
+		var err error
 
-		// Get the path to where we store a local cache of backend configuration
-		// if we're using a remote backend. This may not yet exist which means
-		// we haven't used a non-local backend before. That is okay.
-		dataStatePath := filepath.Join(m.DataDir(), DefaultStateFilename)
-		dataStateMgr := &state.LocalState{Path: dataStatePath}
-		if err := dataStateMgr.RefreshState(); err != nil {
-			return nil, fmt.Errorf("Error loading state: %s", err)
+		// If we have a plan then, we get the the backend from there. Otherwise,
+		// the backend comes from the configuration.
+		if opts.Plan != nil {
+			b, err = m.backendFromPlan(opts)
+		} else {
+			b, err = m.backendFromConfig(opts)
 		}
-
-		// Get the final backend configuration to use. This will handle any
-		// conflicts (legacy remote state, new config, config changes, etc.)
-		// and only return the final configuration to use.
-		b, err = m.backendFromConfig(config, dataStateMgr)
 		if err != nil {
 			return nil, err
 		}
@@ -129,8 +128,9 @@ func (m *Meta) Backend(opts *BackendOpts) (backend.Enhanced, error) {
 // be called.
 func (m *Meta) Operation() *backend.Operation {
 	return &backend.Operation{
-		Targets: m.targets,
-		UIIn:    m.UIInput(),
+		PlanOutBackend: m.backendState,
+		Targets:        m.targets,
+		UIIn:           m.UIInput(),
 	}
 }
 
@@ -215,14 +215,37 @@ func (m *Meta) backendConfig(opts *BackendOpts) (*config.Backend, error) {
 //
 // This function may query the user for input unless input is disabled, in
 // which case this function will error.
-func (m *Meta) backendFromConfig(
-	c *config.Backend, sMgr state.State) (backend.Backend, error) {
+func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
+	// Get the local backend configuration.
+	c, err := m.backendConfig(opts)
+	if err != nil {
+		return nil, fmt.Errorf("Error loading backend config: %s", err)
+	}
+
+	// Get the path to where we store a local cache of backend configuration
+	// if we're using a remote backend. This may not yet exist which means
+	// we haven't used a non-local backend before. That is okay.
+	statePath := filepath.Join(m.DataDir(), DefaultStateFilename)
+	sMgr := &state.LocalState{Path: statePath}
+	if err := sMgr.RefreshState(); err != nil {
+		return nil, fmt.Errorf("Error loading state: %s", err)
+	}
+
 	// Load the state, it must be non-nil for the tests below but can be empty
 	s := sMgr.State()
 	if s == nil {
 		log.Printf("[DEBUG] command: no data state file found for backend config")
 		s = terraform.NewState()
 	}
+
+	// Upon return, we want to set the state we're using in-memory so that
+	// we can access it for commands.
+	defer func() {
+		m.backendState = nil
+		if s := sMgr.State(); s != nil && !s.Backend.Empty() {
+			m.backendState = s.Backend
+		}
+	}()
 
 	// This giant switch statement covers all eight possible combinations
 	// of state settings between: configuring new backends, saved (previously-
@@ -292,6 +315,138 @@ func (m *Meta) backendFromConfig(
 				"Legacy Remote Empty: %v\n",
 			c == nil, s.Backend.Empty(), s.Remote.Empty())
 	}
+}
+
+// backendFromPlan loads the backend from a given plan file.
+func (m *Meta) backendFromPlan(opts *BackendOpts) (backend.Backend, error) {
+	// Precondition check
+	if opts.Plan == nil {
+		panic("plan should not be nil")
+	}
+
+	// We currently don't allow "-state" to be specified.
+	if m.statePath != "" {
+		return nil, fmt.Errorf(
+			"State path cannot be specified with a plan file. The plan itself contains\n" +
+				"the state to use. If you wish to change that, please create a new plan\n" +
+				"and specify the state path when creating the plan.")
+	}
+
+	// We currently don't allow "-state-out" to be specified.
+	if m.stateOutPath != "" {
+		return nil, fmt.Errorf(
+			"`-state-out` cannot be specified with a plan file currently. The plan itself\n" +
+				"contains the state configuration. If you wish to change that, please create a\n" +
+				"new plan and specify the state path.")
+	}
+
+	// We don't allow "-backend-config" currently.
+	if m.backendConfigPath != "" {
+		return nil, fmt.Errorf(
+			"`-backend-config-path` cannot be specified with a plan file currently. The plan\n" +
+				"itself encodes the backend configuration. If you wish to change that, please create\n" +
+				"a new plan with the proper backend configuration.")
+	}
+
+	planState := opts.Plan.State
+
+	/*
+		// Determine the path where we'd be writing state
+		path := DefaultStateFilename
+		if !planState.Remote.Empty() || !planState.Backend.Empty() {
+			path = filepath.Join(m.DataDir(), DefaultStateFilename)
+		}
+
+		// If the path exists, then we need to verify we're writing the same
+		// state lineage. If the path doesn't exist that's okay.
+		_, err := os.Stat(path)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("Error checking state destination: %s", err)
+		}
+		if err == nil {
+			// The file exists, we need to read it and compare
+			if err := m.backendFromPlan_compareStates(state, path); err != nil {
+				return nil, err
+			}
+		}
+	*/
+
+	var b backend.Backend
+	var err error
+	switch {
+	// No remote state at all, all local
+	case planState.Remote.Empty() && planState.Backend.Empty():
+		// Get the local backend
+		b, err = m.Backend(&BackendOpts{ForceLocal: true})
+
+	// New backend configuration set
+	case planState.Remote.Empty() && !planState.Backend.Empty():
+		b, err = m.backendInitFromSaved(planState.Backend)
+
+	// Legacy remote state set
+	case !planState.Remote.Empty() && planState.Backend.Empty():
+		// Write our current state to an inmemory state just so that we
+		// have it in the format of state.State
+		inmem := &state.InmemState{}
+		inmem.WriteState(planState)
+
+		// Get the backend through the normal means of legacy state
+		b, err = m.backend_c_R_s(nil, inmem)
+
+	// Both set, this can't happen in a plan.
+	case !planState.Remote.Empty() && !planState.Backend.Empty():
+		return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanBoth))
+	}
+
+	// If we had an error, return that
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the state so we can determine the effect of using this plan
+	realMgr, err := b.State()
+	if err != nil {
+		return nil, fmt.Errorf("Error reading state: %s", err)
+	}
+	if err := realMgr.RefreshState(); err != nil {
+		return nil, fmt.Errorf("Error reading state: %s", err)
+	}
+	real := realMgr.State()
+
+	// If they're not the same lineage, don't allow this
+	if !real.SameLineage(planState) {
+		return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanLineageDiff))
+	}
+
+	// Compare ages
+	comp, err := real.CompareAges(planState)
+	if err != nil {
+		return nil, fmt.Errorf("Error comparing state ages for safety: %s", err)
+	}
+	switch comp {
+	case terraform.StateAgeEqual:
+		// State ages are equal, this is perfect
+
+	case terraform.StateAgeReceiverOlder:
+		// Real state is somehow older, this is okay.
+
+	case terraform.StateAgeReceiverNewer:
+		// The real state is newer, this is not allowed.
+		return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanOlder))
+	}
+
+	// Write the state
+	newState := opts.Plan.State.DeepCopy()
+	newState.Remote = nil
+	newState.Backend = nil
+	if err := realMgr.WriteState(newState); err != nil {
+		return nil, fmt.Errorf("Error writing state: %s", err)
+	}
+	if err := realMgr.PersistState(); err != nil {
+		return nil, fmt.Errorf("Error writing state: %s", err)
+	}
+
+	return b, nil
 }
 
 //-------------------------------------------------------------------
@@ -1189,6 +1344,38 @@ Terraform saves the complete backend configuration in a local file for
 configuring the backend on future operations. This cannot be disabled. Errors
 are usually due to simple file permission errors. Please look at the error
 above, resolve it, and try again.
+`
+
+const errBackendPlanBoth = `
+The plan file contained both a legacy remote state and backend configuration.
+This is not allowed. Please recreate the plan file with the latest version of
+Terraform.
+`
+
+const errBackendPlanLineageDiff = `
+The plan file contains a state with a differing lineage than the current
+state. This represents a potentially destructive operation and Terraform cannot
+continue safely. Please either update the plan with the latest state or
+delete the current state and try again.
+
+"Lineage" is a unique identifier generated only once on the creation of
+a new, empty state. If these values differ, it means they were created new
+at different times. Therefore, Terraform must assume that they're completely
+different states.
+
+The most common cause of seeing this error is using a plan that was
+created against a different state. Perhaps the plan is very old and the
+state has since been recreated, or perhaps the plan was against a competely
+different infrastructure.
+`
+
+const errBackendPlanOlder = `
+This plan was created against an older state than is current. Please create
+a new plan file against the latest state and try again.
+
+Terraform doesn't allow you to run plans that were created from older
+states since it doesn't properly represent the latest changes Terraform
+may have made, and can result in unsafe behavior.
 `
 
 const inputBackendMigrateChange = `
