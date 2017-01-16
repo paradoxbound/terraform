@@ -3,6 +3,7 @@ package command
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform/helper/copy"
@@ -1968,6 +1969,226 @@ func TestMetaBackend_configuredUnsetWithLegacyCopyLegacy(t *testing.T) {
 	// Verify a local backup
 	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
 		t.Fatalf("err: %s", err)
+	}
+}
+
+// A plan that has no backend config
+func TestMetaBackend_planLocal(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-plan-local"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Create the plan
+	plan := &terraform.Plan{
+		Module: testModule(t, "backend-plan-local"),
+		State:  nil,
+	}
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	b, err := m.Backend(&BackendOpts{Plan: plan})
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Check the state
+	s, err := b.State()
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	state := s.State()
+	if state != nil {
+		t.Fatalf("state should be nil: %#v", state)
+	}
+
+	// Verify the default path
+	if _, err := os.Stat(DefaultStateFilename); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify a backup doesn't exists
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("should not have backend configured")
+	}
+
+	// Write some state
+	state = terraform.NewState()
+	state.Lineage = "changing"
+	s.WriteState(state)
+	if err := s.PersistState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify the state is where we expect
+	{
+		f, err := os.Open(DefaultStateFilename)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if actual.Lineage != state.Lineage {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Verify no local backup
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+}
+
+// A plan that has no backend config, matching local state
+func TestMetaBackend_planLocalMatch(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-plan-local-match"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Create the plan
+	plan := &terraform.Plan{
+		Module: testModule(t, "backend-plan-local-match"),
+		State:  testStateRead(t, DefaultStateFilename),
+	}
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	b, err := m.Backend(&BackendOpts{Plan: plan})
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Check the state
+	s, err := b.State()
+	if err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	if err := s.RefreshState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+	state := s.State()
+	if state == nil {
+		t.Fatal("should is nil")
+	}
+	if state.Lineage != "hello" {
+		t.Fatalf("bad: %#v", state)
+	}
+
+	// Verify the default path
+	if _, err := os.Stat(DefaultStateFilename); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify a backup exists
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("should not have backend configured")
+	}
+
+	// Write some state
+	state = terraform.NewState()
+	state.Lineage = "changing"
+	s.WriteState(state)
+	if err := s.PersistState(); err != nil {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify the state is where we expect
+	{
+		f, err := os.Open(DefaultStateFilename)
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+		actual, err := terraform.ReadState(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("err: %s", err)
+		}
+
+		if actual.Lineage != state.Lineage {
+			t.Fatalf("bad: %#v", actual)
+		}
+	}
+
+	// Verify local backup
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+}
+
+// A plan that has no backend config, mismatched lineage
+func TestMetaBackend_planLocalMismatchLineage(t *testing.T) {
+	// Create a temporary working directory that is empty
+	td := tempDir(t)
+	copy.CopyDir(testFixturePath("backend-plan-local-mismatch-lineage"), td)
+	defer os.RemoveAll(td)
+	defer testChdir(t, td)()
+
+	// Save the original
+	original := testStateRead(t, DefaultStateFilename)
+
+	// Change the lineage
+	planState := testStateRead(t, DefaultStateFilename)
+	planState.Lineage = "bad"
+
+	// Create the plan
+	plan := &terraform.Plan{
+		Module: testModule(t, "backend-plan-local-mismatch-lineage"),
+		State:  planState,
+	}
+
+	// Setup the meta
+	m := testMetaBackend(t, nil)
+
+	// Get the backend
+	_, err := m.Backend(&BackendOpts{Plan: plan})
+	if err == nil {
+		t.Fatal("should have error")
+	}
+	if !strings.Contains(err.Error(), "lineage") {
+		t.Fatalf("bad: %s", err)
+	}
+
+	// Verify our local state didn't change
+	actual := testStateRead(t, DefaultStateFilename)
+	if !actual.Equal(original) {
+		t.Fatalf("bad: %#v", actual)
+	}
+
+	// Verify a backup doesn't exists
+	if _, err := os.Stat(DefaultStateFilename + DefaultBackupExtension); err == nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Verify we have no configured backend/legacy
+	path := filepath.Join(m.DataDir(), DefaultStateFilename)
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("should not have backend configured")
 	}
 }
 

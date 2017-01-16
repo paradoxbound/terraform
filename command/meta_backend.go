@@ -349,6 +349,11 @@ func (m *Meta) backendFromPlan(opts *BackendOpts) (backend.Backend, error) {
 	}
 
 	planState := opts.Plan.State
+	if planState == nil {
+		// The state can be nil, we just have to make it empty for the logic
+		// in this function.
+		planState = terraform.NewState()
+	}
 
 	/*
 		// Determine the path where we'd be writing state
@@ -412,33 +417,36 @@ func (m *Meta) backendFromPlan(opts *BackendOpts) (backend.Backend, error) {
 		return nil, fmt.Errorf("Error reading state: %s", err)
 	}
 	real := realMgr.State()
+	if real != nil {
+		// If they're not the same lineage, don't allow this
+		if !real.SameLineage(planState) {
+			return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanLineageDiff))
+		}
 
-	// If they're not the same lineage, don't allow this
-	if !real.SameLineage(planState) {
-		return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanLineageDiff))
-	}
+		// Compare ages
+		comp, err := real.CompareAges(planState)
+		if err != nil {
+			return nil, fmt.Errorf("Error comparing state ages for safety: %s", err)
+		}
+		switch comp {
+		case terraform.StateAgeEqual:
+			// State ages are equal, this is perfect
 
-	// Compare ages
-	comp, err := real.CompareAges(planState)
-	if err != nil {
-		return nil, fmt.Errorf("Error comparing state ages for safety: %s", err)
-	}
-	switch comp {
-	case terraform.StateAgeEqual:
-		// State ages are equal, this is perfect
+		case terraform.StateAgeReceiverOlder:
+			// Real state is somehow older, this is okay.
 
-	case terraform.StateAgeReceiverOlder:
-		// Real state is somehow older, this is okay.
-
-	case terraform.StateAgeReceiverNewer:
-		// The real state is newer, this is not allowed.
-		return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanOlder))
+		case terraform.StateAgeReceiverNewer:
+			// The real state is newer, this is not allowed.
+			return nil, fmt.Errorf(strings.TrimSpace(errBackendPlanOlder))
+		}
 	}
 
 	// Write the state
 	newState := opts.Plan.State.DeepCopy()
-	newState.Remote = nil
-	newState.Backend = nil
+	if newState != nil {
+		newState.Remote = nil
+		newState.Backend = nil
+	}
 	if err := realMgr.WriteState(newState); err != nil {
 		return nil, fmt.Errorf("Error writing state: %s", err)
 	}
@@ -1354,9 +1362,9 @@ Terraform.
 
 const errBackendPlanLineageDiff = `
 The plan file contains a state with a differing lineage than the current
-state. This represents a potentially destructive operation and Terraform cannot
-continue safely. Please either update the plan with the latest state or
-delete the current state and try again.
+state. By continuing, your current state would be overwritten by the state
+in the plan. Please either update the plan with the latest state or delete
+your current state and try again.
 
 "Lineage" is a unique identifier generated only once on the creation of
 a new, empty state. If these values differ, it means they were created new

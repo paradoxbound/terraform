@@ -226,9 +226,8 @@ func testStateFileRemote(t *testing.T, s *terraform.State) string {
 	return path
 }
 
-// testStateOutput tests that the state at the given path contains
-// the expected state string.
-func testStateOutput(t *testing.T, path string, expected string) {
+// testStateRead reads the state from a file
+func testStateRead(t *testing.T, path string) *terraform.State {
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -240,6 +239,13 @@ func testStateOutput(t *testing.T, path string, expected string) {
 		t.Fatalf("err: %s", err)
 	}
 
+	return newState
+}
+
+// testStateOutput tests that the state at the given path contains
+// the expected state string.
+func testStateOutput(t *testing.T, path string, expected string) {
+	newState := testStateRead(t, path)
 	actual := strings.TrimSpace(newState.String())
 	expected = strings.TrimSpace(expected)
 	if actual != expected {
