@@ -240,8 +240,8 @@ func (m *Meta) backendFromConfig(opts *BackendOpts) (backend.Backend, error) {
 
 	// Upon return, we want to set the state we're using in-memory so that
 	// we can access it for commands.
+	m.backendState = nil
 	defer func() {
-		m.backendState = nil
 		if s := sMgr.State(); s != nil && !s.Backend.Empty() {
 			m.backendState = s.Backend
 		}
